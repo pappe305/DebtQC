@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Call QA Reviewer</title>
+    <link rel="stylesheet" href="/styles.css?v=20260425-14">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Local Call Review</p>
+            <h1>Call QA Reviewer</h1>
+          </div>
+          <div class="status" id="statusPill">Checking setup</div>
+        </header>
+
+        <form id="reviewForm" class="layout">
+          <section class="panel input-panel">
+            <div class="field-row">
+              <label>
+                Case or client name
+                <input name="caseName" placeholder="Example: Smith intake call">
+              </label>
+              <label>
+                1. Call recording audio
+                <input id="recording" name="recording" type="file" accept="audio/*,video/mp4,video/webm,.m4a,.mp3,.wav,.mp4,.webm,.ogg" required>
+              </label>
+            </div>
+
+            <div id="recordingStatus" class="file-status warning">
+              No call recording selected yet.
+            </div>
+
+            <label>
+              2. Intake taken during the call, if completed
+              <textarea name="intake" id="intake" placeholder="Optional: paste the intake notes or CRM fields captured by the agent. Leave blank to review script/process only."></textarea>
+            </label>
+            <div class="file-helper">
+              <input id="intakeFile" name="intakeFile" type="file" accept=".txt,.csv,.json,.md,.docx,.xlsx,.pdf,.jpg,.jpeg,.png,.webp,.gif">
+              <button type="button" class="ghost" data-load-file="intakeFile" data-target="intake">Load intake file</button>
+            </div>
+
+            <label>
+              Approved script
+              <textarea name="script" id="script" placeholder="Paste the call script, required disclosures, greeting, closing, and question flow."></textarea>
+            </label>
+            <div class="file-helper">
+              <input id="scriptFile" name="scriptFile" type="file" accept=".txt,.csv,.json,.md,.docx,.xlsx,.pdf,.jpg,.jpeg,.png,.webp,.gif">
+              <button type="button" class="ghost" data-load-file="scriptFile" data-target="script">Load script file</button>
+              <button type="button" class="ghost" data-save-defaults>Save as default</button>
+            </div>
+
+            <label>
+              Internal process rules
+              <textarea name="process" id="process" placeholder="Paste policies, do-not-say items, escalation rules, consent language, verification steps, or required fields."></textarea>
+            </label>
+            <div class="file-helper">
+              <input id="processFile" name="processFile" type="file" accept=".txt,.csv,.json,.md,.docx,.xlsx,.pdf,.jpg,.jpeg,.png,.webp,.gif">
+              <button type="button" class="ghost" data-load-file="processFile" data-target="process">Load process file</button>
+              <button type="button" class="ghost" data-save-defaults>Save as default</button>
+            </div>
+
+            <label>
+              Reviewer focus
+              <textarea name="reviewerFocus" class="short" placeholder="Optional: note any special concerns for this review."></textarea>
+            </label>
+
+            <div class="actions">
+              <button class="primary" type="submit">Review call</button>
+              <button class="secondary" type="reset">Clear</button>
+            </div>
+
+            <div id="uploadSummary" class="file-status">
+              Ready for files.
+            </div>
+          </section>
+
+          <section class="panel report-panel">
+            <div class="report-head">
+              <div>
+                <p class="eyebrow">QA Report</p>
+                <h2 id="reportTitle">Waiting for a recording</h2>
+              </div>
+              <a id="downloadReport" class="download hidden" href="#" download>Report JSON</a>
+            </div>
+
+            <div id="progress" class="progress hidden">
+              <div class="bar"></div>
+              <p>Transcribing and reviewing the call. Longer recordings can take a few minutes.</p>
+            </div>
+
+            <div id="emptyState" class="empty">
+              Upload the call recording, paste the intake notes, and add your script or process rules. The report will appear here.
+            </div>
+
+            <div id="report" class="report hidden"></div>
+          </section>
+        </form>
+      </section>
+    </main>
+
+    <script src="/app.js?v=20260425-13"></script>
+  </body>
+</html>
