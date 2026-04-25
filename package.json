@@ -1,0 +1,13 @@
+{
+  "name": "call-qa-reviewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Windows app for transcribing call recordings and reviewing them against intake notes, scripts, and internal process rules.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

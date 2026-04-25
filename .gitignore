@@ -1,0 +1,4 @@
+data/uploads/
+data/reports/
+data/defaults.json
+*.log
