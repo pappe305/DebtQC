@@ -74,13 +74,37 @@ const server = http.createServer(async (req, res) => {
       return serveFile(res, path.join(reportDir, safeName), "application/json; charset=utf-8");
     }
 
-    const requestedPath = requestPath === "/" ? "/public/index.html" : `/public${decodeURIComponent(requestPath)}`;
+    const publicRoot = path.join(__dirname, "public");
+    const rootStaticFiles = new Map([
+      ["/", "index.html"],
+      ["/index.html", "index.html"],
+      ["/app.js", "app.js"],
+      ["/styles.css", "styles.css"]
+    ]);
+    const requestedPath = requestPath === "/" ? "/index.html" : decodeURIComponent(requestPath);
     const safePath = path.normalize(requestedPath).replace(/^(\.\.[/\\])+/, "");
-    const filePath = path.join(__dirname, safePath);
-    if (!filePath.startsWith(path.join(__dirname, "public"))) {
+    const publicFilePath = path.join(publicRoot, safePath);
+    const rootFilePath = rootStaticFiles.has(requestPath)
+      ? path.join(__dirname, rootStaticFiles.get(requestPath))
+      : null;
+
+    if (publicFilePath.startsWith(publicRoot)) {
+      try {
+        await fs.access(publicFilePath);
+        return serveFile(res, publicFilePath);
+      } catch {
+        // Fall back to root-level static files for simple GitHub uploads.
+      }
+    }
+
+    if (rootFilePath) {
+      return serveFile(res, rootFilePath);
+    }
+
+    if (!publicFilePath.startsWith(publicRoot)) {
       return sendText(res, 403, "Forbidden");
     }
-    return serveFile(res, filePath);
+    return serveFile(res, publicFilePath);
   } catch (error) {
     console.error(error);
     return sendJson(res, 500, { error: error.message || "Unexpected server error" });
