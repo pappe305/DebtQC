@@ -183,7 +183,7 @@ async function handleAnalyze(req, res) {
       hasIntake: Boolean(intake),
       originalRecording: originalName,
       models: {
-        transcription: TRANSCRIPTION_MODEL,
+        transcription: transcript.model || TRANSCRIPTION_MODEL,
         qa: QA_MODEL
       },
       transcript,
@@ -429,12 +429,35 @@ async function saveDefaults(payload) {
 }
 
 async function transcribeRecording(audioPart) {
+  const models = TRANSCRIPTION_MODEL === "whisper-1"
+    ? ["whisper-1"]
+    : [TRANSCRIPTION_MODEL, "whisper-1"];
+  let lastError = null;
+
+  for (const model of models) {
+    try {
+      await writeLog(`Transcription attempt: ${model}`);
+      const transcript = await transcribeWithModel(audioPart, model);
+      transcript.model = model;
+      return transcript;
+    } catch (error) {
+      lastError = error;
+      await writeLog(`Transcription failed with ${model}: ${error.message}`);
+      const canRetry = /too large|tokens|token/i.test(error.message) && model !== "whisper-1";
+      if (!canRetry) break;
+    }
+  }
+
+  throw lastError || new Error("Transcription failed.");
+}
+
+async function transcribeWithModel(audioPart, model) {
   const form = new FormData();
   const blob = new Blob([audioPart.data], { type: audioPart.contentType || "application/octet-stream" });
   form.append("file", blob, audioPart.filename || "recording");
-  form.append("model", TRANSCRIPTION_MODEL);
+  form.append("model", model);
   form.append("response_format", "json");
-  if (TRANSCRIPTION_MODEL.includes("diarize")) {
+  if (model.includes("diarize")) {
     form.append("chunking_strategy", JSON.stringify({ type: "auto" }));
   }
 
