@@ -1,13 +1,14 @@
 # Call QA Reviewer
 
-A local Windows-friendly app for reviewing call recordings against intake notes, approved scripts, and internal process rules.
+A local Windows-friendly app for reviewing call recordings against completed intake forms, scripts, and internal process rules.
 
 ## What it does
 
 - Uploads a call recording from your PC.
 - Transcribes the recording with OpenAI speech-to-text.
-- Compares the transcript to the intake captured during the call.
-- Flags intake errors, missing information, off-script moments, process violations, and coaching notes.
+- Compares the transcript to the completed intake form, including Mass Tort intake answers that need caller-backed verification.
+- Flags intake errors, missing information, off-script moments, process violations, fraud risk indicators, and coaching notes.
+- Compares each new review against saved prior reports to warn about repeated phone numbers and repeated addresses.
 - Saves your standard script and process rules in the app so you do not need to reload them for every call.
 - Saves each review as JSON in `data/reports`.
 
@@ -52,4 +53,6 @@ Recordings are stored locally under `data/uploads`, saved script/process default
 
 ## Best results
 
-Paste the actual intake notes or CRM export into the intake field. Add your approved script and internal processes, including required disclosures, verification steps, escalation rules, and any phrases agents must avoid.
+Paste the completed intake form or CRM export into the intake field. For Mass Tort reviews, the app treats populated intake answers as recorded answers and checks them against what the caller said. Add any separate approved script and internal processes, including required disclosures, verification steps, escalation rules, and any phrases agents must avoid.
+
+For fraud-risk review, describe any known red flags in the internal process rules or reviewer focus field. The app should be used to surface patterns for human review, not to make a final fraud determination.

@@ -49,8 +49,8 @@ document.querySelectorAll("#intakeFile, #scriptFile, #processFile").forEach((inp
     if (input.id === "intakeFile" && input.files?.[0]) {
       reportTitle.textContent = "Intake file selected";
       renderEmpty(target.value.trim()
-        ? "The intake file is loaded. Choose the recording and click Review call."
-        : "The intake file is selected and will be read when the review starts. Choose the recording and click Review call.");
+        ? "The intake form is loaded. Choose the recording and click Review call."
+        : "The intake form is selected and will be read when the review starts. Choose the recording and click Review call.");
     }
   });
 });
@@ -114,7 +114,7 @@ form.addEventListener("reset", () => {
     downloadReport.classList.add("hidden");
     reportTitle.textContent = "Ready for a call";
     await loadDefaults();
-    renderEmpty("Choose a call recording. Add intake notes if they exist, or leave intake blank to review script/process only.");
+    renderEmpty("Choose a call recording. Add the completed intake form if it exists, or leave intake blank to review script/process only.");
   }, 0);
 });
 
@@ -152,7 +152,7 @@ async function loadDefaults() {
     if (!processInput.value.trim()) processInput.value = defaults.process || "";
     if (defaults.script || defaults.process) {
       reportTitle.textContent = "Ready for a call";
-      renderEmpty("Choose a call recording. Add intake notes if they exist, or leave intake blank to review script/process only. Your saved script and process rules are already loaded.");
+      renderEmpty("Choose a call recording. Add the completed intake form if it exists, or leave intake blank to review script/process only. Your saved script and process rules are already loaded.");
     }
   } catch {
     // Defaults are optional; the app can still review calls without them.
@@ -172,7 +172,7 @@ async function saveDefaults() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Defaults could not be saved.");
     reportTitle.textContent = "Defaults saved";
-    renderEmpty("Your script and process rules are saved in this app. For future calls, choose the recording and add intake notes only when they exist.");
+    renderEmpty("Your script and process rules are saved in this app. For future calls, choose the recording and add the intake form only when it exists.");
   } catch (error) {
     renderError(error.message || "Defaults could not be saved.");
   }
@@ -241,7 +241,7 @@ function updateRecordingStatus() {
   recordingStatus.textContent = `Recording selected: ${file.name}${sizeMb}`;
   recordingStatus.classList.remove("warning");
   reportTitle.textContent = "Recording selected";
-  renderEmpty("Add intake notes if they exist, or leave intake blank to review script/process only. Then click Review call.");
+  renderEmpty("Add the completed intake form if it exists, or leave intake blank to review script/process only. Then click Review call.");
 }
 
 function updateUploadSummary() {
@@ -269,7 +269,10 @@ function renderReport(payload) {
   const qa = payload.report;
   const hasIntake = payload.hasIntake !== false;
   const leadPhone = extractPhoneFromFilename(payload.originalRecording) || qa.leadPhoneNumber || "Not found";
-  reportTitle.textContent = payload.caseName || "Completed review";
+  const tortType = normalizeTortType(payload.tortType) || "Unknown tort";
+  const reportName = buildReportName(leadPhone, tortType);
+  reportTitle.textContent = reportName;
+  document.title = reportName;
   emptyState.classList.add("hidden");
   report.classList.remove("hidden");
   downloadReport.href = payload.reportUrl;
@@ -281,7 +284,8 @@ function renderReport(payload) {
     ["Intake", hasIntake ? qa.intakeAccuracyScore : "N/A"],
     ["Script", qa.scriptAdherenceScore],
     ["Process", qa.processComplianceScore],
-    ["Experience", qa.customerExperienceScore]
+    ["Experience", qa.customerExperienceScore],
+    ["Fraud risk", qa.fraudRiskScore ?? 0]
   ];
 
   report.innerHTML = `
@@ -300,6 +304,10 @@ function renderReport(payload) {
         <strong>${escapeHtml(leadPhone)}</strong>
       </div>
       <div>
+        <span>Tort reviewed</span>
+        <strong>${escapeHtml(tortType)}</strong>
+      </div>
+      <div>
         <span>Agent</span>
         <strong>${escapeHtml(qa.agentName || "Not found")}</strong>
       </div>
@@ -307,7 +315,7 @@ function renderReport(payload) {
 
     <section class="share-actions">
       <button class="secondary" type="button" id="printReport">Print report</button>
-      <a class="download" href="${findingsUrl}" download="${safeDownloadName(payload.caseName)}-key-findings.txt">Key findings TXT</a>
+      <a class="download" href="${findingsUrl}" download="${safeDownloadName(reportName)}-key-findings.txt">Key findings TXT</a>
       <button class="secondary" type="button" id="copyKeyFindings">Copy key findings</button>
     </section>
 
@@ -321,10 +329,12 @@ function renderReport(payload) {
     </section>
 
     ${renderIssueGroup("Key findings", qa.keyFindings)}
-    ${renderIssueGroup("Intake mismatches", qa.intakeMismatches)}
+    ${renderIssueGroup("Recorded answer mismatches", qa.intakeMismatches)}
     ${renderIssueGroup("Missing information", qa.missingInformation)}
     ${renderIssueGroup("Off-script moments", qa.offScriptMoments)}
     ${renderIssueGroup("Process violations", qa.processViolations)}
+    ${renderIssueGroup("Fraud risk indicators", qa.fraudRiskIndicators)}
+    ${renderIssueGroup("Cross-case pattern warnings", qa.crossCasePatternWarnings)}
     ${renderList("Follow-up questions", qa.followUpQuestions)}
     ${renderList("Coaching notes", qa.coachingNotes)}
 
@@ -393,10 +403,12 @@ function buildKeyFindingsText(payload) {
   const qa = payload.report;
   const hasIntake = payload.hasIntake !== false;
   const leadPhone = extractPhoneFromFilename(payload.originalRecording) || qa.leadPhoneNumber || "Not found";
+  const tortType = normalizeTortType(payload.tortType) || "Unknown tort";
   const sections = [
     `Call QA Key Findings`,
-    `Case: ${payload.caseName || "Untitled call"}`,
+    `Case: ${buildReportName(leadPhone, tortType)}`,
     `Lead phone: ${leadPhone}`,
+    `Tort reviewed: ${tortType}`,
     `Agent: ${qa.agentName || "Not found"}`,
     `Created: ${new Date(payload.createdAt || Date.now()).toLocaleString()}`,
     `Overall status: ${labelStatus(qa.overallStatus)}`,
@@ -408,12 +420,15 @@ function buildKeyFindingsText(payload) {
     `- Script: ${qa.scriptAdherenceScore}`,
     `- Process: ${qa.processComplianceScore}`,
     `- Experience: ${qa.customerExperienceScore}`,
+    `- Fraud risk: ${qa.fraudRiskScore ?? 0}`,
     "",
     formatIssueText("Key findings", qa.keyFindings),
-    formatIssueText("Intake mismatches", qa.intakeMismatches),
+    formatIssueText("Recorded answer mismatches", qa.intakeMismatches),
     formatIssueText("Missing information", qa.missingInformation),
     formatIssueText("Off-script moments", qa.offScriptMoments),
     formatIssueText("Process violations", qa.processViolations),
+    formatIssueText("Fraud risk indicators", qa.fraudRiskIndicators),
+    formatIssueText("Cross-case pattern warnings", qa.crossCasePatternWarnings),
     formatSimpleListText("Follow-up questions", qa.followUpQuestions),
     formatSimpleListText("Coaching notes", qa.coachingNotes)
   ];
@@ -436,6 +451,19 @@ function extractPhoneFromFilename(name) {
   const phone = candidates.at(-1);
   if (!phone) return "";
   return `(${phone.slice(0, 3)}) ${phone.slice(3, 6)}-${phone.slice(6)}`;
+}
+
+function buildReportName(phone, tortType) {
+  return `${phone || "No phone"} - ${tortType || "Unknown tort"}`;
+}
+
+function normalizeTortType(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/\bdepo\b/i.test(text) && /birth\s+control|shot|depo[-\s]?provera/i.test(text)) {
+    return "Depo Birth Control";
+  }
+  return text;
 }
 
 function formatIssueText(title, issues = []) {

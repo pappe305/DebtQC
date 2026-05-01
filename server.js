@@ -158,6 +158,7 @@ async function handleAnalyze(req, res) {
     const jobId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID().slice(0, 8)}`;
     const originalName = sanitizeFilename(audioPart.filename || "recording");
     const leadPhoneFromRecording = extractPhoneFromFilename(originalName);
+    const tortType = extractTortTypeFromIntake(intake);
     const uploadPath = path.join(uploadDir, `${jobId}-${originalName}`);
     await fs.writeFile(uploadPath, audioPart.data);
     await writeLog(`Recording saved: ${originalName}`);
@@ -175,12 +176,29 @@ async function handleAnalyze(req, res) {
     if (leadPhoneFromRecording) {
       report.leadPhoneNumber = leadPhoneFromRecording;
     }
+    const patternWarnings = await detectCrossCasePatternWarnings({
+      currentId: jobId,
+      report,
+      intake,
+      transcript,
+      tortType,
+      originalRecording: originalName
+    });
+    report.crossCasePatternWarnings = [
+      ...(Array.isArray(report.crossCasePatternWarnings) ? report.crossCasePatternWarnings : []),
+      ...patternWarnings
+    ];
+    if (patternWarnings.length) {
+      report.overallStatus = report.overallStatus === "pass" ? "needs_review" : report.overallStatus;
+      report.fraudRiskScore = Math.max(Number(report.fraudRiskScore || 0), Math.min(100, 55 + patternWarnings.length * 15));
+    }
 
     const saved = {
       id: jobId,
       createdAt: new Date().toISOString(),
       caseName,
       hasIntake: Boolean(intake),
+      tortType,
       originalRecording: originalName,
       models: {
         transcription: transcript.model || TRANSCRIPTION_MODEL,
@@ -494,10 +512,24 @@ async function reviewCall({ caseName, intake, script, process, reviewerFocus, tr
               type: "input_text",
               text: [
                 "You are a meticulous call quality auditor.",
-                "Compare the transcript against the intake notes, approved script, and internal process rules.",
+                "This app may be used for Mass Tort Claims intake calls where the completed intake form is also the call script.",
+                "When intake notes or an intake form are supplied, treat every populated intake answer as a recorded field that must be verified against what the caller actually said in the transcript.",
+                "For checkbox, dropdown, radio button, yes/no, and multi-select fields, verify that the selected option is exactly the option supported by the lead's answer.",
+                "If the lead says a different diagnosis, injury, product, exposure, date, provider, treatment location, consent answer, or eligibility answer than the selected intake option, flag it as a high-severity intake_error.",
+                "For example, if the lead says brain cancer but the form selected brain tumor, or vice versa, that is a recorded answer mismatch unless the transcript clearly supports both.",
+                "For each populated intake answer, determine whether the transcript supports it, contradicts it, or does not contain enough evidence.",
+                "Put incorrect, contradicted, unsupported, or materially incomplete recorded answers in intakeMismatches with the recorded answer, caller-supported answer, and transcript evidence.",
+                "Use missingInformation for required intake/script questions that were not asked, not answered, or not captured clearly.",
+                "Do not assume a populated intake answer is correct merely because it appears in the form; require transcript support.",
+                "If the intake form includes eligibility, exposure, injury, medication/product, date, provider, diagnosis, claimant identity, contact, representation, or consent fields, verify them field by field.",
+                "If separate approved script or internal process rules are supplied, also review script adherence and process compliance.",
                 "If no intake notes are supplied, run a script and process compliance review only.",
                 "When no intake notes are supplied, do not create intake mismatch findings solely because the intake is absent.",
                 "In that no-intake mode, use missingInformation for required call fields or required process steps that were not captured or not asked during the call.",
+                "Also look for fraud risk indicators, but do not accuse anyone of fraud or state that fraud occurred.",
+                "Use fraudRiskIndicators for suspicious patterns that need human review: coached or scripted-sounding lead answers, a third party telling the lead what to say, agent leading or stretching answers to qualify the claimant, inconsistent exposure/injury/timeline facts, generic or memorized provider details, refusal or inability to provide ordinary details, paid-lead language, duplicate-looking identity/contact details, or claim facts that seem tailored only to eligibility.",
+                "For Roundup or similar exposure cases, flag addresses that appear to be apartment complexes, large shared properties, generic work sites, or locations where personal product use would be unusual unless the transcript clearly explains the exposure.",
+                "For hospital, provider, residence, exposure, employment, or injury-location fields, flag exact repeated-looking addresses or unusually generic facility details as risk indicators if supported by the call or intake.",
                 "Extract the lead phone number and agent name from the intake notes or transcript when present.",
                 "If either value is not clearly present, return an empty string for that field.",
                 "Flag only issues supported by the supplied materials. If evidence is uncertain, mark confidence below 0.7.",
@@ -514,11 +546,12 @@ async function reviewCall({ caseName, intake, script, process, reviewerFocus, tr
               type: "input_text",
               text: [
                 `Case name: ${caseName}`,
+                `Tort type from intake question 1: ${extractTortTypeFromIntake(intake) || "(not found)"}`,
                 "",
-                "INTAKE NOTES TAKEN DURING THE CALL:",
+                "COMPLETED INTAKE FORM / RECORDED ANSWERS TO VERIFY:",
                 intake || "(none supplied)",
                 "",
-                "APPROVED CALL SCRIPT:",
+                "SEPARATE APPROVED CALL SCRIPT, IF ANY:",
                 script || "(none supplied)",
                 "",
                 "INTERNAL PROCESS RULES:",
@@ -584,7 +617,7 @@ function reportSchema() {
     properties: {
       title: { type: "string" },
       severity: { type: "string", enum: ["critical", "high", "medium", "low"] },
-      category: { type: "string", enum: ["intake_error", "missing_information", "off_script", "process_violation", "customer_risk", "other"] },
+      category: { type: "string", enum: ["intake_error", "missing_information", "off_script", "process_violation", "customer_risk", "fraud_risk", "other"] },
       evidence: { type: "string" },
       transcriptReference: { type: "string" },
       expected: { type: "string" },
@@ -606,6 +639,7 @@ function reportSchema() {
       scriptAdherenceScore: { type: "integer" },
       processComplianceScore: { type: "integer" },
       customerExperienceScore: { type: "integer" },
+      fraudRiskScore: { type: "integer" },
       keyFindings: {
         type: "array",
         items: issue
@@ -623,6 +657,14 @@ function reportSchema() {
         items: issue
       },
       processViolations: {
+        type: "array",
+        items: issue
+      },
+      fraudRiskIndicators: {
+        type: "array",
+        items: issue
+      },
+      crossCasePatternWarnings: {
         type: "array",
         items: issue
       },
@@ -644,11 +686,14 @@ function reportSchema() {
       "scriptAdherenceScore",
       "processComplianceScore",
       "customerExperienceScore",
+      "fraudRiskScore",
       "keyFindings",
       "intakeMismatches",
       "missingInformation",
       "offScriptMoments",
       "processViolations",
+      "fraudRiskIndicators",
+      "crossCasePatternWarnings",
       "followUpQuestions",
       "coachingNotes"
     ]
@@ -762,6 +807,240 @@ function extractPhoneFromFilename(name) {
   const phone = candidates.at(-1);
   if (!phone) return "";
   return `(${phone.slice(0, 3)}) ${phone.slice(3, 6)}-${phone.slice(6)}`;
+}
+
+function extractTortTypeFromIntake(intake) {
+  const text = String(intake || "")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+  if (!text) return "";
+
+  const lines = text
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!/(^|\b)(question\s*)?1[\).:\-\s]/i.test(line) && !/\bq\.?\s*1\b/i.test(line)) continue;
+
+    const sameLineValue = valueAfterQuestionMarker(line);
+    if (sameLineValue) return cleanTortType(sameLineValue);
+
+    for (const nextLine of lines.slice(index + 1, index + 5)) {
+      const cleaned = cleanTortType(nextLine);
+      if (cleaned && !/^question\s*\d+/i.test(cleaned)) return cleaned;
+    }
+  }
+
+  const tortLine = lines.find((line) => /\b(tort|claim|campaign|case type|matter type)\b/i.test(line));
+  if (tortLine) {
+    const value = tortLine.split(/[:\-]/).slice(1).join("-").trim();
+    if (value) return cleanTortType(value);
+  }
+
+  return "";
+}
+
+function valueAfterQuestionMarker(line) {
+  return line
+    .replace(/^\s*(question\s*)?1[\).:\-\s]+/i, "")
+    .replace(/^\s*q\.?\s*1[\).:\-\s]+/i, "")
+    .replace(/^(type\s+of\s+)?(tort|claim|case|matter)(\s+reviewed)?\s*[:\-]\s*/i, "")
+    .trim();
+}
+
+function cleanTortType(value) {
+  const cleaned = String(value || "")
+    .replace(/^(answer|response|value|selected|type\s+of\s+tort|tort|claim|case\s+type)\s*[:\-]\s*/i, "")
+    .replace(/\s+/g, " ")
+    .replace(/^["']|["']$/g, "")
+    .trim()
+    .slice(0, 80);
+  return normalizeTortType(cleaned);
+}
+
+function normalizeTortType(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/\bdepo\b/i.test(text) && /birth\s+control|shot|depo[-\s]?provera/i.test(text)) {
+    return "Depo Birth Control";
+  }
+  return text;
+}
+
+async function detectCrossCasePatternWarnings({ currentId, report, intake, transcript, tortType, originalRecording }) {
+  const warnings = [];
+  const currentPhone = report.leadPhoneNumber || extractPhoneFromFilename(originalRecording);
+  const currentTort = normalizeComparable(tortType || "");
+  const currentText = [intake, transcript?.text, report?.summary].filter(Boolean).join("\n");
+  const currentAddresses = extractAddresses(currentText);
+
+  if (looksLikeRoundup(tortType, currentText) && hasApartmentExposureRisk(currentText)) {
+    warnings.push(makeRiskIssue({
+      title: "Roundup exposure address may be a shared residential property",
+      severity: "medium",
+      evidence: "The review materials mention Roundup or weed killer along with apartment, unit, complex, or similar shared-property wording near exposure/location language.",
+      reference: findSnippet(currentText, /(roundup|weed killer|apartment|apartments|apt|unit|complex|address|applied|spray)/i),
+      expected: "Confirm the exact exposure location and whether the claimant personally used or was exposed to the product there.",
+      fix: "Have a reviewer verify the exposure address and ask follow-up questions before accepting eligibility."
+    }));
+  }
+
+  if (!currentPhone && !currentAddresses.length) return warnings;
+
+  const previousReports = await readRecentReports(currentId, 150);
+  const repeatedAddresses = new Map();
+  let repeatedPhone = null;
+
+  for (const previous of previousReports) {
+    const previousReport = previous.report || {};
+    const previousPhone = previousReport.leadPhoneNumber || extractPhoneFromFilename(previous.originalRecording);
+    const previousTort = normalizeComparable(previous.tortType || "");
+    const sameTort = currentTort && previousTort && currentTort === previousTort;
+    const previousLabel = `${previous.caseName || previous.originalRecording || previous.id || "prior review"}${previous.createdAt ? ` (${new Date(previous.createdAt).toLocaleDateString("en-US")})` : ""}`;
+
+    if (currentPhone && previousPhone && normalizePhone(currentPhone) === normalizePhone(previousPhone)) {
+      repeatedPhone = previousLabel;
+    }
+
+    const previousText = [
+      previousReport.summary,
+      previous.transcript?.text,
+      ...(previousReport.keyFindings || []).map(issueToSearchText),
+      ...(previousReport.intakeMismatches || []).map(issueToSearchText),
+      ...(previousReport.fraudRiskIndicators || []).map(issueToSearchText)
+    ].filter(Boolean).join("\n");
+    const previousAddresses = extractAddresses(previousText);
+
+    for (const address of currentAddresses) {
+      if (!previousAddresses.includes(address)) continue;
+      const count = repeatedAddresses.get(address) || { address, labels: [], sameTort: false };
+      count.labels.push(previousLabel);
+      count.sameTort ||= sameTort;
+      repeatedAddresses.set(address, count);
+    }
+  }
+
+  if (repeatedPhone) {
+    warnings.push(makeRiskIssue({
+      title: "Lead phone number appeared in a prior review",
+      severity: "medium",
+      evidence: `This phone number also appears in ${repeatedPhone}. This may be legitimate, but repeated claimant contact details should be checked.`,
+      reference: currentPhone,
+      expected: "Confirm whether this is the same claimant, a duplicate intake, or a shared/incorrect phone number.",
+      fix: "Compare the prior review before approving the intake."
+    }));
+  }
+
+  for (const item of repeatedAddresses.values()) {
+    const labels = [...new Set(item.labels)].slice(0, 4).join("; ");
+    warnings.push(makeRiskIssue({
+      title: item.sameTort ? "Same address repeated in the same tort" : "Same address repeated in prior reviews",
+      severity: item.sameTort ? "high" : "medium",
+      evidence: `The address "${item.address}" also appears in prior saved review(s): ${labels}. Shared addresses can be normal, but exact repeats are a known pattern worth checking.`,
+      reference: item.address,
+      expected: "Confirm whether the address is genuinely tied to this claimant and claim facts.",
+      fix: "Review the earlier case details and look for matching scripted answers, providers, exposure locations, or claimant relationships."
+    }));
+  }
+
+  return warnings.slice(0, 8);
+}
+
+async function readRecentReports(currentId, limit) {
+  try {
+    const entries = await fs.readdir(reportDir, { withFileTypes: true });
+    const files = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json") && !entry.name.startsWith(currentId))
+      .map((entry) => entry.name)
+      .sort()
+      .reverse()
+      .slice(0, limit);
+
+    const reports = [];
+    for (const file of files) {
+      try {
+        reports.push(JSON.parse(await fs.readFile(path.join(reportDir, file), "utf8")));
+      } catch {
+        // Skip unreadable older reports.
+      }
+    }
+    return reports;
+  } catch {
+    return [];
+  }
+}
+
+function extractAddresses(text) {
+  const addressPattern = /\b\d{2,6}\s+[A-Za-z0-9.'#& -]{2,70}\s+(?:street|st|avenue|ave|road|rd|drive|dr|boulevard|blvd|lane|ln|court|ct|circle|cir|place|pl|way|terrace|ter|parkway|pkwy|highway|hwy)\b(?:\s+(?:apt|apartment|unit|suite|ste|#)\s*[A-Za-z0-9-]+)?/gi;
+  const matches = String(text || "").match(addressPattern) || [];
+  return [...new Set(matches.map(normalizeAddress).filter((address) => address.length >= 8))];
+}
+
+function normalizeAddress(address) {
+  return String(address || "")
+    .toLowerCase()
+    .replace(/[.,]/g, "")
+    .replace(/\b(street)\b/g, "st")
+    .replace(/\b(avenue)\b/g, "ave")
+    .replace(/\b(road)\b/g, "rd")
+    .replace(/\b(drive)\b/g, "dr")
+    .replace(/\b(boulevard)\b/g, "blvd")
+    .replace(/\b(lane)\b/g, "ln")
+    .replace(/\b(court)\b/g, "ct")
+    .replace(/\b(circle)\b/g, "cir")
+    .replace(/\b(place)\b/g, "pl")
+    .replace(/\b(terrace)\b/g, "ter")
+    .replace(/\b(parkway)\b/g, "pkwy")
+    .replace(/\b(highway)\b/g, "hwy")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasApartmentExposureRisk(text) {
+  const source = String(text || "");
+  const sharedProperty = /\b(apartment|apartments|apt\.?|unit|complex|building|condo|townhome|multi[-\s]?family)\b/i;
+  const exposureWords = /\b(roundup|weed killer|spray|sprayed|applied|application|exposure|yard|lawn|garden|address|property|residence|where)\b/i;
+  return sharedProperty.test(source) && exposureWords.test(source);
+}
+
+function looksLikeRoundup(tortType, text) {
+  return /\b(roundup|weed killer|glyphosate)\b/i.test(`${tortType || ""}\n${text || ""}`);
+}
+
+function normalizeComparable(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function normalizePhone(value) {
+  return String(value || "").replace(/\D/g, "").slice(-10);
+}
+
+function issueToSearchText(issue) {
+  return [issue?.title, issue?.evidence, issue?.transcriptReference, issue?.expected].filter(Boolean).join(" ");
+}
+
+function makeRiskIssue({ title, severity, evidence, reference, expected, fix }) {
+  return {
+    title,
+    severity,
+    category: "fraud_risk",
+    evidence,
+    transcriptReference: reference || "",
+    expected,
+    recommendedFix: fix,
+    confidence: 0.72
+  };
+}
+
+function findSnippet(text, pattern) {
+  const source = String(text || "").replace(/\s+/g, " ").trim();
+  const match = source.match(pattern);
+  if (!match || match.index === undefined) return "";
+  const start = Math.max(0, match.index - 90);
+  return source.slice(start, start + 220).trim();
 }
 
 function asNumberOrNull(value) {
