@@ -366,6 +366,23 @@ textarea:disabled {
   font-size: 18px;
 }
 
+.lead-details .inline-edit {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  border: 1px solid #b8c6d6;
+  border-radius: 5px;
+  background: #ffffff;
+  padding: 6px 8px;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.lead-details .inline-edit:focus {
+  border-color: var(--accent);
+}
+
 .score {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -610,6 +627,12 @@ pre {
   }
 
   .lead-details strong {
+    font-size: 12px;
+  }
+
+  .lead-details .inline-edit {
+    border: 0;
+    padding: 0;
     font-size: 12px;
   }
 

@@ -867,6 +867,12 @@ function normalizeTortType(value) {
   if (/\bdepo\b/i.test(text) && /birth\s+control|shot|depo[-\s]?provera/i.test(text)) {
     return "Depo Birth Control";
   }
+  if (/\b(roundup|weed killer|glyphosate)\b/i.test(text)) {
+    return "Roundup";
+  }
+  if (text.length > 80 && /\?$/.test(text)) {
+    return "";
+  }
   return text;
 }
 

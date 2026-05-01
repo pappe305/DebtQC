@@ -305,7 +305,7 @@ function renderReport(payload) {
       </div>
       <div>
         <span>Tort reviewed</span>
-        <strong>${escapeHtml(tortType)}</strong>
+        <input class="inline-edit" id="tortTypeOverride" value="${escapeHtml(tortType)}" aria-label="Tort reviewed">
       </div>
       <div>
         <span>Agent</span>
@@ -315,7 +315,7 @@ function renderReport(payload) {
 
     <section class="share-actions">
       <button class="secondary" type="button" id="printReport">Print report</button>
-      <a class="download" href="${findingsUrl}" download="${safeDownloadName(reportName)}-key-findings.txt">Key findings TXT</a>
+      <a class="download" id="keyFindingsDownload" href="${findingsUrl}" download="${safeDownloadName(reportName)}-key-findings.txt">Key findings TXT</a>
       <button class="secondary" type="button" id="copyKeyFindings">Copy key findings</button>
     </section>
 
@@ -346,6 +346,19 @@ function renderReport(payload) {
 
   document.querySelector("#copyKeyFindings")?.addEventListener("click", copyKeyFindings);
   document.querySelector("#printReport")?.addEventListener("click", () => window.print());
+  document.querySelector("#tortTypeOverride")?.addEventListener("input", (event) => {
+    const updatedTort = event.target.value.trim() || "Unknown tort";
+    payload.tortType = updatedTort;
+    const updatedReportName = buildReportName(leadPhone, updatedTort);
+    reportTitle.textContent = updatedReportName;
+    document.title = updatedReportName;
+    latestKeyFindingsText = buildKeyFindingsText(payload);
+    const link = document.querySelector("#keyFindingsDownload");
+    if (link) {
+      link.href = makeTextDownload(latestKeyFindingsText);
+      link.download = `${safeDownloadName(updatedReportName)}-key-findings.txt`;
+    }
+  });
 }
 
 function renderIssueGroup(title, issues = []) {
@@ -462,6 +475,12 @@ function normalizeTortType(value) {
   if (!text) return "";
   if (/\bdepo\b/i.test(text) && /birth\s+control|shot|depo[-\s]?provera/i.test(text)) {
     return "Depo Birth Control";
+  }
+  if (/\b(roundup|weed killer|glyphosate)\b/i.test(text)) {
+    return "Roundup";
+  }
+  if (text.length > 80 && /\?$/.test(text)) {
+    return "Unknown tort";
   }
   return text;
 }
