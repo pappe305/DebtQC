@@ -20,9 +20,11 @@ const uploadDir = path.join(dataDir, "uploads");
 const reportDir = path.join(dataDir, "reports");
 const defaultsPath = path.join(dataDir, "defaults.json");
 const logPath = path.join(dataDir, "server.log");
+const qcLogPath = path.join(dataDir, "qc-log.csv");
 
 await fs.mkdir(uploadDir, { recursive: true });
 await fs.mkdir(reportDir, { recursive: true });
+await ensureQcLog();
 
 process.on("uncaughtException", (error) => {
   void writeLog(`uncaughtException: ${error.stack || error.message}`);
@@ -55,7 +57,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && requestPath === "/api/defaults") {
-      return sendJson(res, 200, await readDefaults());
+      const type = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`).searchParams.get("type");
+      return sendJson(res, 200, await readDefaults(type));
+    }
+
+    if (req.method === "GET" && requestPath === "/api/qc-log") {
+      return serveFile(res, qcLogPath, "text/csv; charset=utf-8");
     }
 
     if (req.method === "POST" && requestPath === "/api/defaults") {
@@ -148,8 +155,9 @@ async function handleAnalyze(req, res) {
     }
 
     const caseName = getField("caseName") || "Untitled call";
+    const reviewType = normalizeReviewType(getField("reviewType"));
     const intake = getField("intake") || await getUploadedText("intakeFile");
-    const defaults = await readDefaults();
+    const defaults = await readDefaults(reviewType);
     const script = getField("script") || await getUploadedText("scriptFile") || defaults.script;
     const process = getField("process") || await getUploadedText("processFile") || defaults.process;
     const reviewerFocus = getField("reviewerFocus");
@@ -167,6 +175,7 @@ async function handleAnalyze(req, res) {
     await writeLog(`Transcription complete: ${transcript.text.length} chars`);
     const report = await reviewCall({
       caseName,
+      reviewType,
       intake,
       script,
       process,
@@ -197,6 +206,7 @@ async function handleAnalyze(req, res) {
       id: jobId,
       createdAt: new Date().toISOString(),
       caseName,
+      reviewType,
       hasIntake: Boolean(intake),
       tortType,
       originalRecording: originalName,
@@ -210,6 +220,7 @@ async function handleAnalyze(req, res) {
 
     const reportName = `${jobId}.json`;
     await fs.writeFile(path.join(reportDir, reportName), JSON.stringify(saved, null, 2), "utf8");
+    await appendQcLog(saved, reportName);
     await writeLog(`Review complete: ${reportName}`);
     return sendJson(res, 200, { ...saved, reportUrl: `/reports/${encodeURIComponent(reportName)}` });
   } catch (error) {
@@ -424,26 +435,83 @@ async function loadOptionalPackage(name) {
   return null;
 }
 
-async function readDefaults() {
+async function readDefaults(type = "debt") {
+  const reviewType = normalizeReviewType(type);
   try {
     const text = await fs.readFile(defaultsPath, "utf8");
     const parsed = JSON.parse(text);
+    if (parsed.profiles) {
+      const selected = parsed.profiles[reviewType] || {};
+      return {
+        type: reviewType,
+        script: String(selected.script || ""),
+        process: String(selected.process || "")
+      };
+    }
+
+    // Older app versions stored one shared default. Treat that as Debt QC.
+    if (reviewType !== "debt") {
+      return { type: reviewType, script: "", process: "" };
+    }
+
     return {
+      type: reviewType,
       script: String(parsed.script || ""),
       process: String(parsed.process || "")
     };
   } catch {
-    return { script: "", process: "" };
+    return { type: reviewType, script: "", process: "" };
   }
 }
 
 async function saveDefaults(payload) {
-  const defaults = {
-    script: String(payload.script || ""),
-    process: String(payload.process || "")
+  const reviewType = normalizeReviewType(payload.type);
+  const allDefaults = await readAllDefaults();
+  const existing = allDefaults.profiles[reviewType] || { script: "", process: "" };
+  allDefaults.profiles[reviewType] = {
+    script: String(payload.script || "").trim() || existing.script,
+    process: String(payload.process || "").trim() || existing.process
   };
-  await fs.writeFile(defaultsPath, JSON.stringify(defaults, null, 2), "utf8");
-  return defaults;
+  await fs.writeFile(defaultsPath, JSON.stringify(allDefaults, null, 2), "utf8");
+  return { type: reviewType, ...allDefaults.profiles[reviewType] };
+}
+
+async function readAllDefaults() {
+  try {
+    const parsed = JSON.parse(await fs.readFile(defaultsPath, "utf8"));
+    if (parsed.profiles) {
+      return {
+        profiles: {
+          debt: normalizeDefaultProfile(parsed.profiles.debt),
+          mass_tort: normalizeDefaultProfile(parsed.profiles.mass_tort)
+        }
+      };
+    }
+    return {
+      profiles: {
+        debt: normalizeDefaultProfile(parsed),
+        mass_tort: { script: "", process: "" }
+      }
+    };
+  } catch {
+    return {
+      profiles: {
+        debt: { script: "", process: "" },
+        mass_tort: { script: "", process: "" }
+      }
+    };
+  }
+}
+
+function normalizeDefaultProfile(profile) {
+  return {
+    script: String(profile?.script || ""),
+    process: String(profile?.process || "")
+  };
+}
+
+function normalizeReviewType(value) {
+  return value === "mass_tort" ? "mass_tort" : "debt";
 }
 
 async function transcribeRecording(audioPart) {
@@ -495,7 +563,7 @@ async function transcribeWithModel(audioPart, model) {
   return normalizeTranscript(payload);
 }
 
-async function reviewCall({ caseName, intake, script, process, reviewerFocus, transcript }) {
+async function reviewCall({ caseName, reviewType, intake, script, process, reviewerFocus, transcript }) {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -546,6 +614,7 @@ async function reviewCall({ caseName, intake, script, process, reviewerFocus, tr
               type: "input_text",
               text: [
                 `Case name: ${caseName}`,
+                `Review type: ${labelReviewType(reviewType)}`,
                 `Tort type from intake question 1: ${extractTortTypeFromIntake(intake) || "(not found)"}`,
                 "",
                 "COMPLETED INTAKE FORM / RECORDED ANSWERS TO VERIFY:",
@@ -1047,6 +1116,77 @@ function findSnippet(text, pattern) {
   if (!match || match.index === undefined) return "";
   const start = Math.max(0, match.index - 90);
   return source.slice(start, start + 220).trim();
+}
+
+async function appendQcLog(saved, reportName) {
+  const qa = saved.report || {};
+  const row = [
+    saved.createdAt,
+    labelReviewType(saved.reviewType),
+    saved.caseName,
+    qa.leadPhoneNumber || extractPhoneFromFilename(saved.originalRecording),
+    saved.tortType || "",
+    qa.agentName || "",
+    qa.overallStatus || "",
+    saved.hasIntake ? qa.intakeAccuracyScore : "N/A",
+    qa.scriptAdherenceScore ?? "",
+    qa.processComplianceScore ?? "",
+    qa.customerExperienceScore ?? "",
+    qa.fraudRiskScore ?? "",
+    countItems(qa.keyFindings),
+    countItems(qa.intakeMismatches),
+    countItems(qa.missingInformation),
+    countItems(qa.processViolations),
+    countItems(qa.fraudRiskIndicators),
+    countItems(qa.crossCasePatternWarnings),
+    saved.originalRecording,
+    reportName
+  ];
+
+  await ensureQcLog();
+  await fs.appendFile(qcLogPath, `${row.map(csvCell).join(",")}\n`, "utf8");
+}
+
+async function ensureQcLog() {
+  try {
+    await fs.access(qcLogPath);
+  } catch {
+    const header = [
+      "review_date",
+      "review_type",
+      "case_name",
+      "lead_phone",
+      "tort_reviewed",
+      "agent",
+      "overall_status",
+      "intake_score",
+      "script_score",
+      "process_score",
+      "experience_score",
+      "fraud_risk_score",
+      "key_findings",
+      "answer_mismatches",
+      "missing_information",
+      "process_violations",
+      "fraud_risk_indicators",
+      "cross_case_warnings",
+      "recording_file",
+      "report_file"
+    ];
+    await fs.writeFile(qcLogPath, `${header.map(csvCell).join(",")}\n`, "utf8");
+  }
+}
+
+function countItems(items) {
+  return Array.isArray(items) ? items.length : 0;
+}
+
+function csvCell(value) {
+  return `"${String(value ?? "").replaceAll('"', '""')}"`;
+}
+
+function labelReviewType(value) {
+  return value === "mass_tort" ? "Mass Tort QC" : "Debt QC";
 }
 
 function asNumberOrNull(value) {

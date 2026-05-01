@@ -8,6 +8,7 @@ const downloadReport = document.querySelector("#downloadReport");
 const recordingStatus = document.querySelector("#recordingStatus");
 const uploadSummary = document.querySelector("#uploadSummary");
 const recordingInput = form.elements.recording;
+const reviewTypeInput = document.querySelector("#reviewType");
 const intakeInput = form.elements.intake;
 const scriptInput = document.querySelector("#script");
 const processInput = document.querySelector("#process");
@@ -23,6 +24,7 @@ updateRecordingStatus();
 updateUploadSummary();
 
 recordingInput.addEventListener("change", updateRecordingStatus);
+reviewTypeInput.addEventListener("change", () => loadDefaults(true));
 uploadInputs.forEach((name) => {
   const input = form.elements[name] || document.querySelector(`#${name}`);
   input?.addEventListener("change", updateUploadSummary);
@@ -143,16 +145,19 @@ async function fetchWithTimeout(url, options, timeoutMs) {
   }
 }
 
-async function loadDefaults() {
+async function loadDefaults(replaceCurrent = false) {
   try {
-    const response = await fetch("/api/defaults");
+    const response = await fetch(`/api/defaults?type=${encodeURIComponent(reviewTypeInput.value)}`);
     if (!response.ok) return;
     const defaults = await response.json();
-    if (!scriptInput.value.trim()) scriptInput.value = defaults.script || "";
-    if (!processInput.value.trim()) processInput.value = defaults.process || "";
+    if (replaceCurrent || !scriptInput.value.trim()) scriptInput.value = defaults.script || "";
+    if (replaceCurrent || !processInput.value.trim()) processInput.value = defaults.process || "";
     if (defaults.script || defaults.process) {
       reportTitle.textContent = "Ready for a call";
-      renderEmpty("Choose a call recording. Add the completed intake form if it exists, or leave intake blank to review script/process only. Your saved script and process rules are already loaded.");
+      renderEmpty(`${labelReviewType(reviewTypeInput.value)} defaults are loaded. Choose a call recording and add the intake form when it exists.`);
+    } else if (replaceCurrent) {
+      reportTitle.textContent = "No saved defaults";
+      renderEmpty(`${labelReviewType(reviewTypeInput.value)} does not have saved script/process defaults yet. Load or paste them, then click Save as default.`);
     }
   } catch {
     // Defaults are optional; the app can still review calls without them.
@@ -161,10 +166,16 @@ async function loadDefaults() {
 
 async function saveDefaults() {
   try {
+    if (!scriptInput.value.trim() && !processInput.value.trim()) {
+      renderEmpty("There is no script or process text to save yet. Load or paste the debt script/policies first, then click Save as default.", true);
+      return;
+    }
+
     const response = await fetch("/api/defaults", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        type: reviewTypeInput.value,
         script: scriptInput.value,
         process: processInput.value
       })
@@ -172,10 +183,14 @@ async function saveDefaults() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Defaults could not be saved.");
     reportTitle.textContent = "Defaults saved";
-    renderEmpty("Your script and process rules are saved in this app. For future calls, choose the recording and add the intake form only when it exists.");
+    renderEmpty(`${labelReviewType(reviewTypeInput.value)} script and process rules are saved. Future reviews with this type selected will use them automatically.`);
   } catch (error) {
     renderError(error.message || "Defaults could not be saved.");
   }
+}
+
+function labelReviewType(value) {
+  return value === "mass_tort" ? "Mass Tort QC" : "Debt QC";
 }
 
 async function loadFileIntoTextarea(input, target) {

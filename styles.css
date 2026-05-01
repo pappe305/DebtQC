@@ -28,6 +28,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -48,6 +49,12 @@ textarea {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 18px;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .eyebrow {
@@ -130,6 +137,7 @@ label {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid #cbd5df;
@@ -150,6 +158,7 @@ textarea.short {
 }
 
 input:focus,
+select:focus,
 textarea:focus {
   outline: 3px solid rgba(15, 118, 110, 0.18);
   border-color: var(--accent);
@@ -207,6 +216,7 @@ button {
 
 button:disabled,
 input:disabled,
+select:disabled,
 textarea:disabled {
   opacity: 0.68;
   cursor: wait;
@@ -515,6 +525,7 @@ pre {
   }
 
   .topbar,
+  .topbar-actions,
   .report-head,
   .issue-title {
     align-items: start;
