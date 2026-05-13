@@ -284,7 +284,7 @@ function renderReport(payload) {
   const qa = payload.report;
   const hasIntake = payload.hasIntake !== false;
   const leadPhone = extractPhoneFromFilename(payload.originalRecording) || qa.leadPhoneNumber || "Not found";
-  const tortType = normalizeTortType(payload.tortType) || "Unknown tort";
+  const tortType = payload.reviewType === "debt" ? "Debt" : normalizeTortType(payload.tortType) || "Unknown tort";
   const reportName = buildReportName(leadPhone, tortType);
   reportTitle.textContent = reportName;
   document.title = reportName;
@@ -431,7 +431,7 @@ function buildKeyFindingsText(payload) {
   const qa = payload.report;
   const hasIntake = payload.hasIntake !== false;
   const leadPhone = extractPhoneFromFilename(payload.originalRecording) || qa.leadPhoneNumber || "Not found";
-  const tortType = normalizeTortType(payload.tortType) || "Unknown tort";
+  const tortType = payload.reviewType === "debt" ? "Debt" : normalizeTortType(payload.tortType) || "Unknown tort";
   const sections = [
     `Call QA Key Findings`,
     `Case: ${buildReportName(leadPhone, tortType)}`,
@@ -494,10 +494,13 @@ function normalizeTortType(value) {
   if (/\b(roundup|weed killer|glyphosate)\b/i.test(text)) {
     return "Roundup";
   }
-  if (text.length > 80 && /\?$/.test(text)) {
+  if (/\b(sensitivity of this claim|attorneys? will|attorney|law firm|get a hold of you|contact you|promptly|phone|email|address)\b/i.test(text)) {
     return "Unknown tort";
   }
-  return text;
+  if (text.length > 55 || /[?]/.test(text) || /,\s+\w+/.test(text)) {
+    return "Unknown tort";
+  }
+  return text.slice(0, 55);
 }
 
 function formatIssueText(title, issues = []) {

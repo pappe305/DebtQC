@@ -166,7 +166,7 @@ async function handleAnalyze(req, res) {
     const jobId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID().slice(0, 8)}`;
     const originalName = sanitizeFilename(audioPart.filename || "recording");
     const leadPhoneFromRecording = extractPhoneFromFilename(originalName);
-    const tortType = extractTortTypeFromIntake(intake);
+    const tortType = reviewType === "debt" ? "Debt" : extractTortTypeFromIntake(intake);
     const uploadPath = path.join(uploadDir, `${jobId}-${originalName}`);
     await fs.writeFile(uploadPath, audioPart.data);
     await writeLog(`Recording saved: ${originalName}`);
@@ -921,12 +921,15 @@ function valueAfterQuestionMarker(line) {
 }
 
 function cleanTortType(value) {
-  const cleaned = String(value || "")
+  const raw = String(value || "");
+  const normalized = normalizeTortType(raw);
+  if (normalized) return normalized;
+
+  const cleaned = raw
     .replace(/^(answer|response|value|selected|type\s+of\s+tort|tort|claim|case\s+type)\s*[:\-]\s*/i, "")
     .replace(/\s+/g, " ")
     .replace(/^["']|["']$/g, "")
-    .trim()
-    .slice(0, 80);
+    .trim();
   return normalizeTortType(cleaned);
 }
 
@@ -939,10 +942,13 @@ function normalizeTortType(value) {
   if (/\b(roundup|weed killer|glyphosate)\b/i.test(text)) {
     return "Roundup";
   }
-  if (text.length > 80 && /\?$/.test(text)) {
+  if (/\b(sensitivity of this claim|attorneys? will|attorney|law firm|get a hold of you|contact you|promptly|phone|email|address)\b/i.test(text)) {
     return "";
   }
-  return text;
+  if (text.length > 55 || /[?]/.test(text) || /,\s+\w+/.test(text)) {
+    return "";
+  }
+  return text.slice(0, 55);
 }
 
 async function detectCrossCasePatternWarnings({ currentId, report, intake, transcript, tortType, originalRecording }) {
