@@ -65,6 +65,10 @@ const server = http.createServer(async (req, res) => {
       return serveFile(res, qcLogPath, "text/csv; charset=utf-8");
     }
 
+    if (req.method === "GET" && requestPath === "/api/reports") {
+      return sendJson(res, 200, await listSavedReports());
+    }
+
     if (req.method === "POST" && requestPath === "/api/defaults") {
       const payload = JSON.parse((await readRequestBody(req)).toString("utf8") || "{}");
       const saved = await saveDefaults(payload);
@@ -73,6 +77,14 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && requestPath === "/api/analyze") {
       return await handleAnalyze(req, res);
+    }
+
+    if (req.method === "POST" && requestPath === "/api/ask-review") {
+      return await handleAskReview(req, res);
+    }
+
+    if (req.method === "POST" && requestPath === "/api/batch-patterns") {
+      return await handleBatchPatterns(req, res);
     }
 
     if (req.method === "GET" && requestPath.startsWith("/reports/")) {
@@ -226,6 +238,101 @@ async function handleAnalyze(req, res) {
   } catch (error) {
     await writeLog(`Review failed: ${error.stack || error.message}`);
     return sendJson(res, 500, { error: error.message || "The review failed." });
+  }
+}
+
+async function handleAskReview(req, res) {
+  try {
+    if (!OPENAI_API_KEY || OPENAI_API_KEY === "your_api_key_here") {
+      return sendJson(res, 400, {
+        error: "OPENAI_API_KEY is missing or still set to the placeholder. Set your real OpenAI API key, then restart the app."
+      });
+    }
+
+    const payload = JSON.parse((await readRequestBody(req)).toString("utf8") || "{}");
+    const question = String(payload.question || "").trim();
+    const review = payload.review || {};
+    if (!question) {
+      return sendJson(res, 400, { error: "Type a question about this review first." });
+    }
+    if (!review?.report || !review?.transcript?.text) {
+      return sendJson(res, 400, { error: "The completed review was not available for follow-up questions." });
+    }
+
+    const answer = await answerReviewQuestion({ question, review });
+    return sendJson(res, 200, { answer });
+  } catch (error) {
+    await writeLog(`Review question failed: ${error.stack || error.message}`);
+    return sendJson(res, 500, { error: error.message || "The question could not be answered." });
+  }
+}
+
+async function handleBatchPatterns(req, res) {
+  try {
+    await writeLog("Batch pattern request started");
+    if (!OPENAI_API_KEY || OPENAI_API_KEY === "your_api_key_here") {
+      return sendJson(res, 400, {
+        error: "OPENAI_API_KEY is missing or still set to the placeholder. Set your real OpenAI API key, then restart the app."
+      });
+    }
+
+    const body = await readRequestBody(req);
+    const contentType = req.headers["content-type"] || "";
+    const boundary = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i)?.[1] || contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i)?.[2];
+    if (!boundary) {
+      return sendJson(res, 400, { error: "Expected a multipart form upload." });
+    }
+
+    const parts = parseMultipart(body, boundary);
+    const getField = (name) => parts.find((part) => part.name === name && !part.filename)?.data.toString("utf8").trim() || "";
+    const recordings = parts.filter((part) => part.name === "batchRecordings" && part.filename && part.data?.length);
+    if (recordings.length < 2) {
+      return sendJson(res, 400, { error: "Choose at least two recordings for a pattern scan." });
+    }
+    if (recordings.length > 12) {
+      return sendJson(res, 400, { error: "Use 12 or fewer recordings at a time for pattern review." });
+    }
+
+    const jobId = `batch-${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID().slice(0, 8)}`;
+    const reviewType = normalizeReviewType(getField("batchReviewType"));
+    const focus = getField("batchFocus");
+    const vendor = getField("batchVendor");
+    const transcripts = [];
+
+    for (const recording of recordings) {
+      const originalName = sanitizeFilename(recording.filename || "recording");
+      const uploadPath = path.join(uploadDir, `${jobId}-${originalName}`);
+      await fs.writeFile(uploadPath, recording.data);
+      const transcript = await transcribeRecording(recording);
+      transcripts.push({
+        filename: originalName,
+        leadPhoneNumber: extractPhoneFromFilename(originalName),
+        transcript
+      });
+      await writeLog(`Batch transcription complete: ${originalName}, ${transcript.text.length} chars`);
+    }
+
+    const report = await reviewBatchPatterns({ reviewType, focus, vendor, transcripts });
+    const saved = {
+      id: jobId,
+      createdAt: new Date().toISOString(),
+      reviewType,
+      vendor,
+      focus,
+      recordings: transcripts.map((item) => ({
+        filename: item.filename,
+        leadPhoneNumber: item.leadPhoneNumber,
+        transcript: item.transcript
+      })),
+      report
+    };
+    const reportName = `${jobId}.json`;
+    await fs.writeFile(path.join(reportDir, reportName), JSON.stringify(saved, null, 2), "utf8");
+    await writeLog(`Batch pattern review complete: ${reportName}`);
+    return sendJson(res, 200, { ...saved, reportUrl: `/reports/${encodeURIComponent(reportName)}` });
+  } catch (error) {
+    await writeLog(`Batch pattern review failed: ${error.stack || error.message}`);
+    return sendJson(res, 500, { error: error.message || "The batch pattern review failed." });
   }
 }
 
@@ -591,6 +698,8 @@ async function reviewCall({ caseName, reviewType, intake, script, process, revie
                 "Do not assume a populated intake answer is correct merely because it appears in the form; require transcript support.",
                 "If the intake form includes eligibility, exposure, injury, medication/product, date, provider, diagnosis, claimant identity, contact, representation, or consent fields, verify them field by field.",
                 "If separate approved script or internal process rules are supplied, also review script adherence and process compliance.",
+                "For Mass Tort Claims, the completed intake form is also the call script. If no separate script is supplied but intake notes are supplied, treat the intake questions and required answers as the approved script/question flow.",
+                "In Mass Tort reviews, do not say no script was included merely because the separate script field is blank; evaluate whether the agent followed the intake-form questions as the script.",
                 "If no intake notes are supplied, run a script and process compliance review only.",
                 "When no intake notes are supplied, do not create intake mismatch findings solely because the intake is absent.",
                 "In that no-intake mode, use missingInformation for required call fields or required process steps that were not captured or not asked during the call.",
@@ -656,6 +765,140 @@ async function reviewCall({ caseName, reviewType, intake, script, process, revie
   const outputText = extractOutputText(payload);
   if (!outputText) {
     throw new Error("QA review completed but did not return a report.");
+  }
+  return JSON.parse(outputText);
+}
+
+async function answerReviewQuestion({ question, review }) {
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: QA_MODEL,
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: [
+                "You answer follow-up questions about one completed call QA review.",
+                "Use only the supplied review report and transcript. Do not use outside knowledge.",
+                "If the answer is not supported by the supplied review or transcript, say that it is not found in this review.",
+                "Be concise and practical. When possible, mention the relevant finding title or quote a short transcript phrase.",
+                "Do not make final fraud determinations; use fraud risk or needs human review language."
+              ].join(" ")
+            }
+          ]
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: [
+                `Question: ${question}`,
+                "",
+                "REVIEW DETAILS:",
+                JSON.stringify({
+                  id: review.id,
+                  createdAt: review.createdAt,
+                  caseName: review.caseName,
+                  reviewType: review.reviewType,
+                  tortType: review.tortType,
+                  originalRecording: review.originalRecording,
+                  report: review.report
+                }, null, 2),
+                "",
+                "TRANSCRIPT:",
+                String(review.transcript?.text || "").slice(0, 120000)
+              ].join("\n")
+            }
+          ]
+        }
+      ]
+    })
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error?.message || `Follow-up question failed with status ${response.status}`);
+  }
+
+  const outputText = extractOutputText(payload);
+  if (!outputText) {
+    throw new Error("The follow-up question completed but did not return an answer.");
+  }
+  return outputText;
+}
+
+async function reviewBatchPatterns({ reviewType, focus, vendor, transcripts }) {
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: QA_MODEL,
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: [
+                "You review groups of intake call transcripts to identify possible fraud-risk or coaching patterns.",
+                "Do not conclude that fraud occurred. Flag similarities, shared wording, shared timeline, shared symptoms, same opening style, same vendor-linked behavior, same unusual details, or other patterns that deserve human review.",
+                "Focus on patterns across calls, not a full QA score for each call.",
+                "For Mass Tort, look for repeated injury/symptom progression, repeated phrases before stating injury, coached eligibility facts, shared provider/location details, same hesitation points, or same story structure.",
+                "Use concise operations language."
+              ].join(" ")
+            }
+          ]
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: [
+                `Review type: ${labelReviewType(reviewType)}`,
+                `Vendor/source, if known: ${vendor || "(not supplied)"}`,
+                `Reviewer focus: ${focus || "(pattern scan for similarities and fraud-risk indicators)"}`,
+                "",
+                "CALL TRANSCRIPTS:",
+                transcripts.map((item, index) => [
+                  `Call ${index + 1}: ${item.filename}`,
+                  `Lead phone from filename: ${item.leadPhoneNumber || "(not found)"}`,
+                  item.transcript.text
+                ].join("\n")).join("\n\n---\n\n")
+              ].join("\n")
+            }
+          ]
+        }
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "batch_pattern_report",
+          strict: true,
+          schema: batchPatternSchema()
+        }
+      }
+    })
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error?.message || `Batch pattern review failed with status ${response.status}`);
+  }
+  const outputText = extractOutputText(payload);
+  if (!outputText) {
+    throw new Error("Batch pattern review completed but did not return a report.");
   }
   return JSON.parse(outputText);
 }
@@ -766,6 +1009,38 @@ function reportSchema() {
       "followUpQuestions",
       "coachingNotes"
     ]
+  };
+}
+
+function batchPatternSchema() {
+  const pattern = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      title: { type: "string" },
+      severity: { type: "string", enum: ["critical", "high", "medium", "low"] },
+      patternType: { type: "string" },
+      callsInvolved: { type: "array", items: { type: "string" } },
+      evidence: { type: "string" },
+      whyItMatters: { type: "string" },
+      recommendedFollowUp: { type: "string" },
+      confidence: { type: "number" }
+    },
+    required: ["title", "severity", "patternType", "callsInvolved", "evidence", "whyItMatters", "recommendedFollowUp", "confidence"]
+  };
+
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      summary: { type: "string" },
+      overallRiskLevel: { type: "string", enum: ["low", "medium", "high", "critical"] },
+      patterns: { type: "array", items: pattern },
+      vendorSignals: { type: "array", items: pattern },
+      recommendedNextSteps: { type: "array", items: { type: "string" } },
+      callsNeedingIndividualReview: { type: "array", items: { type: "string" } }
+    },
+    required: ["summary", "overallRiskLevel", "patterns", "vendorSignals", "recommendedNextSteps", "callsNeedingIndividualReview"]
   };
 }
 
@@ -1046,6 +1321,43 @@ async function readRecentReports(currentId, limit) {
         reports.push(JSON.parse(await fs.readFile(path.join(reportDir, file), "utf8")));
       } catch {
         // Skip unreadable older reports.
+      }
+    }
+    return reports;
+  } catch {
+    return [];
+  }
+}
+
+async function listSavedReports() {
+  try {
+    const entries = await fs.readdir(reportDir, { withFileTypes: true });
+    const files = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => entry.name)
+      .sort()
+      .reverse()
+      .slice(0, 200);
+
+    const reports = [];
+    for (const file of files) {
+      try {
+        const saved = JSON.parse(await fs.readFile(path.join(reportDir, file), "utf8"));
+        reports.push({
+          id: saved.id || file.replace(/\.json$/i, ""),
+          file,
+          createdAt: saved.createdAt || "",
+          caseName: saved.caseName || "",
+          reviewType: saved.reviewType || (saved.id?.startsWith("batch-") ? "batch" : "debt"),
+          tortType: saved.tortType || "",
+          originalRecording: saved.originalRecording || "",
+          leadPhoneNumber: saved.report?.leadPhoneNumber || extractPhoneFromFilename(saved.originalRecording),
+          agentName: saved.report?.agentName || "",
+          overallStatus: saved.report?.overallStatus || saved.report?.overallRiskLevel || "",
+          isBatch: Boolean(saved.recordings && saved.report?.patterns)
+        });
+      } catch {
+        // Skip unreadable reports.
       }
     }
     return reports;

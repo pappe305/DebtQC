@@ -12,11 +12,20 @@ const reviewTypeInput = document.querySelector("#reviewType");
 const intakeInput = form.elements.intake;
 const scriptInput = document.querySelector("#script");
 const processInput = document.querySelector("#process");
+const previousReviewsButton = document.querySelector("#previousReviewsButton");
+const previousReviewsPanel = document.querySelector("#previousReviewsPanel");
+const previousReviewsList = document.querySelector("#previousReviewsList");
+const batchPatternsButton = document.querySelector("#batchPatternsButton");
+const batchPatternsPanel = document.querySelector("#batchPatternsPanel");
+const batchPatternForm = document.querySelector("#batchPatternForm");
+const batchPatternStatus = document.querySelector("#batchPatternStatus");
+const batchPatternReport = document.querySelector("#batchPatternReport");
 const textLikeExtensions = [".txt", ".csv", ".json", ".md", ".log"];
 const serverReadableExtensions = [".docx", ".xlsx", ".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif"];
 const uploadInputs = ["recording", "intakeFile", "scriptFile", "processFile"];
 const maxUploadMb = 200;
 let latestKeyFindingsText = "";
+let latestReviewPayload = null;
 
 checkHealth();
 loadDefaults();
@@ -25,6 +34,15 @@ updateUploadSummary();
 
 recordingInput.addEventListener("change", updateRecordingStatus);
 reviewTypeInput.addEventListener("change", () => loadDefaults(true));
+previousReviewsButton?.addEventListener("click", openPreviousReviews);
+batchPatternsButton?.addEventListener("click", () => {
+  batchPatternsPanel.classList.toggle("hidden");
+  previousReviewsPanel.classList.add("hidden");
+});
+batchPatternForm?.addEventListener("submit", reviewBatchPatterns);
+document.querySelectorAll("[data-close-panel]").forEach((button) => {
+  button.addEventListener("click", () => document.querySelector(`#${button.dataset.closePanel}`)?.classList.add("hidden"));
+});
 uploadInputs.forEach((name) => {
   const input = form.elements[name] || document.querySelector(`#${name}`);
   input?.addEventListener("change", updateUploadSummary);
@@ -189,7 +207,61 @@ async function saveDefaults() {
   }
 }
 
+async function openPreviousReviews() {
+  previousReviewsPanel.classList.remove("hidden");
+  batchPatternsPanel.classList.add("hidden");
+  previousReviewsList.innerHTML = `<p class="quiet">Loading saved reviews...</p>`;
+  try {
+    const response = await fetch("/api/reports");
+    const reviews = await response.json();
+    if (!response.ok) throw new Error("Previous reviews could not be loaded.");
+    if (!reviews.length) {
+      previousReviewsList.innerHTML = `<p class="quiet">No saved reviews found yet.</p>`;
+      return;
+    }
+    previousReviewsList.innerHTML = reviews.map((item) => `
+      <article class="review-row">
+        <div>
+          <strong>${escapeHtml(reviewListTitle(item))}</strong>
+          <span>${escapeHtml(formatReviewDate(item.createdAt))} · ${escapeHtml(labelReviewType(item.reviewType))} · ${escapeHtml(item.overallStatus || "saved")}</span>
+        </div>
+        <button class="secondary" type="button" data-open-report="${escapeHtml(item.file)}">Open</button>
+      </article>
+    `).join("");
+    previousReviewsList.querySelectorAll("[data-open-report]").forEach((button) => {
+      button.addEventListener("click", () => openSavedReport(button.dataset.openReport));
+    });
+  } catch (error) {
+    previousReviewsList.innerHTML = `<p class="quiet">${escapeHtml(error.message || "Previous reviews could not be loaded.")}</p>`;
+  }
+}
+
+async function openSavedReport(file) {
+  try {
+    const response = await fetch(`/reports/${encodeURIComponent(file)}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error("Saved report could not be opened.");
+    previousReviewsPanel.classList.add("hidden");
+    if (payload.recordings && payload.report?.patterns) {
+      renderBatchPatternReport(payload);
+      batchPatternsPanel.classList.remove("hidden");
+      return;
+    }
+    renderReport({ ...payload, reportUrl: `/reports/${encodeURIComponent(file)}` });
+  } catch (error) {
+    previousReviewsList.innerHTML = `<p class="quiet">${escapeHtml(error.message || "Saved report could not be opened.")}</p>`;
+  }
+}
+
+function reviewListTitle(item) {
+  if (item.isBatch) return item.caseName || item.file.replace(/\.json$/i, "");
+  const phone = item.leadPhoneNumber || extractPhoneFromFilename(item.originalRecording) || "No phone";
+  const type = item.reviewType === "debt" ? "Debt" : normalizeTortType(item.tortType) || "Unknown tort";
+  return buildReportName(phone, type);
+}
+
 function labelReviewType(value) {
+  if (value === "batch") return "Batch pattern";
   return value === "mass_tort" ? "Mass Tort QC" : "Debt QC";
 }
 
@@ -281,6 +353,7 @@ function getSelectedFiles() {
 }
 
 function renderReport(payload) {
+  latestReviewPayload = payload;
   const qa = payload.report;
   const hasIntake = payload.hasIntake !== false;
   const leadPhone = extractPhoneFromFilename(payload.originalRecording) || qa.leadPhoneNumber || "Not found";
@@ -353,6 +426,15 @@ function renderReport(payload) {
     ${renderList("Follow-up questions", qa.followUpQuestions)}
     ${renderList("Coaching notes", qa.coachingNotes)}
 
+    <section class="group ask-review">
+      <h3>Ask about this review</h3>
+      <form id="askReviewForm" class="ask-form">
+        <textarea id="reviewQuestion" class="short" placeholder="Example: Why was this marked needs review? Where did the lead confirm the diagnosis?"></textarea>
+        <button class="secondary" type="submit">Ask</button>
+      </form>
+      <div id="reviewAnswer" class="answer-box hidden"></div>
+    </section>
+
     <details class="transcript">
       <summary>Transcript</summary>
       <pre>${escapeHtml(payload.transcript.text || "")}</pre>
@@ -361,6 +443,7 @@ function renderReport(payload) {
 
   document.querySelector("#copyKeyFindings")?.addEventListener("click", copyKeyFindings);
   document.querySelector("#printReport")?.addEventListener("click", () => window.print());
+  document.querySelector("#askReviewForm")?.addEventListener("submit", askAboutReview);
   document.querySelector("#tortTypeOverride")?.addEventListener("input", (event) => {
     const updatedTort = event.target.value.trim() || "Unknown tort";
     payload.tortType = updatedTort;
@@ -374,6 +457,144 @@ function renderReport(payload) {
       link.download = `${safeDownloadName(updatedReportName)}-key-findings.txt`;
     }
   });
+}
+
+async function askAboutReview(event) {
+  event.preventDefault();
+  const questionInput = document.querySelector("#reviewQuestion");
+  const answerBox = document.querySelector("#reviewAnswer");
+  const button = event.currentTarget.querySelector("button");
+  const question = questionInput?.value.trim();
+
+  if (!question) {
+    answerBox.textContent = "Type a question about this completed review first.";
+    answerBox.classList.remove("hidden");
+    answerBox.classList.add("error");
+    return;
+  }
+
+  try {
+    button.disabled = true;
+    answerBox.textContent = "Checking this review...";
+    answerBox.classList.remove("hidden", "error");
+    const response = await fetchWithTimeout("/api/ask-review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question,
+        review: latestReviewPayload
+      })
+    }, 120000);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "The question could not be answered.");
+    answerBox.textContent = payload.answer || "No answer was returned.";
+  } catch (error) {
+    answerBox.textContent = error.message || "The question could not be answered.";
+    answerBox.classList.add("error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function reviewBatchPatterns(event) {
+  event.preventDefault();
+  const recordings = batchPatternForm.elements.batchRecordings.files || [];
+  if (recordings.length < 2) {
+    batchPatternStatus.textContent = "Choose at least two recordings to compare.";
+    batchPatternStatus.classList.remove("hidden");
+    batchPatternStatus.classList.add("error");
+    return;
+  }
+
+  const totalMb = [...recordings].reduce((sum, file) => sum + file.size, 0) / 1024 / 1024;
+  if (totalMb > maxUploadMb) {
+    batchPatternStatus.textContent = `The selected recordings total ${totalMb.toFixed(1)} MB. The current app limit is ${maxUploadMb} MB.`;
+    batchPatternStatus.classList.remove("hidden");
+    batchPatternStatus.classList.add("error");
+    return;
+  }
+
+  try {
+    batchPatternForm.querySelectorAll("button, input, select, textarea").forEach((element) => {
+      element.disabled = true;
+    });
+    batchPatternReport.classList.add("hidden");
+    batchPatternStatus.textContent = `Uploading and comparing ${recordings.length} recordings. This can take several minutes.`;
+    batchPatternStatus.classList.remove("hidden", "error");
+    const response = await fetchWithTimeout("/api/batch-patterns", {
+      method: "POST",
+      body: new FormData(batchPatternForm)
+    }, 900000);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "The batch pattern review could not be completed.");
+    batchPatternStatus.classList.add("hidden");
+    renderBatchPatternReport(payload);
+  } catch (error) {
+    batchPatternStatus.textContent = error.message || "The batch pattern review could not be completed.";
+    batchPatternStatus.classList.remove("hidden");
+    batchPatternStatus.classList.add("error");
+  } finally {
+    batchPatternForm.querySelectorAll("button, input, select, textarea").forEach((element) => {
+      element.disabled = false;
+    });
+  }
+}
+
+function renderBatchPatternReport(payload) {
+  const batch = payload.report || {};
+  batchPatternReport.classList.remove("hidden");
+  batchPatternReport.innerHTML = `
+    <section class="summary">
+      <div class="verdict ${escapeHtml(batch.overallRiskLevel || "needs_review")}">${escapeHtml(labelRisk(batch.overallRiskLevel))}</div>
+      <p>${escapeHtml(batch.summary || "Pattern review complete.")}</p>
+    </section>
+
+    <section class="lead-details">
+      <div><span>Date</span><strong>${escapeHtml(formatReviewDate(payload.createdAt))}</strong></div>
+      <div><span>Review type</span><strong>${escapeHtml(labelReviewType(payload.reviewType))}</strong></div>
+      <div><span>Vendor/source</span><strong>${escapeHtml(payload.vendor || "Not supplied")}</strong></div>
+      <div><span>Recordings</span><strong>${escapeHtml(String(payload.recordings?.length || 0))}</strong></div>
+    </section>
+
+    ${renderPatternGroup("Similarity patterns", batch.patterns)}
+    ${renderPatternGroup("Vendor/source signals", batch.vendorSignals)}
+    ${renderList("Recommended next steps", batch.recommendedNextSteps)}
+    ${renderList("Calls needing individual review", batch.callsNeedingIndividualReview)}
+  `;
+}
+
+function renderPatternGroup(title, patterns = []) {
+  if (!patterns.length) return `<section class="group no-issues"><h3>${title}</h3><p class="quiet">No patterns found.</p></section>`;
+  return `
+    <section class="group">
+      <h3>${title}</h3>
+      <div class="issues">
+        ${patterns.map((pattern) => `
+          <article class="issue ${escapeHtml(pattern.severity)}">
+            <div class="issue-title">
+              <strong>${escapeHtml(pattern.title)}</strong>
+              <span>${escapeHtml(pattern.severity)} - ${Math.round(Number(pattern.confidence || 0) * 100)}%</span>
+            </div>
+            <p>${escapeHtml(pattern.evidence)}</p>
+            <dl>
+              <dt>Calls</dt><dd>${escapeHtml((pattern.callsInvolved || []).join(", "))}</dd>
+              <dt>Why</dt><dd>${escapeHtml(pattern.whyItMatters)}</dd>
+              <dt>Follow-up</dt><dd>${escapeHtml(pattern.recommendedFollowUp)}</dd>
+            </dl>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function labelRisk(value) {
+  return {
+    low: "Low risk",
+    medium: "Medium risk",
+    high: "High risk",
+    critical: "Critical risk"
+  }[value] || "Needs review";
 }
 
 function renderIssueGroup(title, issues = []) {

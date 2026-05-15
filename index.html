@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Call QA Reviewer</title>
-    <link rel="stylesheet" href="/styles.css?v=20260513-1">
+    <link rel="stylesheet" href="/styles.css?v=20260515-1">
   </head>
   <body>
     <main class="shell">
@@ -15,6 +15,8 @@
             <h1>Call QA Reviewer</h1>
           </div>
           <div class="topbar-actions">
+            <button class="secondary" type="button" id="previousReviewsButton">Previous reviews</button>
+            <button class="secondary" type="button" id="batchPatternsButton">Batch patterns</button>
             <a class="download" href="/api/qc-log" download="qc-log.csv">QC log</a>
             <div class="status" id="statusPill">Checking setup</div>
           </div>
@@ -112,9 +114,58 @@
             <div id="report" class="report hidden"></div>
           </section>
         </form>
+
+        <section class="panel drawer hidden" id="previousReviewsPanel">
+          <div class="drawer-head">
+            <div>
+              <p class="eyebrow">History</p>
+              <h2>Previous reviews</h2>
+            </div>
+            <button class="ghost" type="button" data-close-panel="previousReviewsPanel">Close</button>
+          </div>
+          <div id="previousReviewsList" class="review-list"></div>
+        </section>
+
+        <section class="panel drawer hidden" id="batchPatternsPanel">
+          <div class="drawer-head">
+            <div>
+              <p class="eyebrow">Pattern Scan</p>
+              <h2>Batch patterns</h2>
+            </div>
+            <button class="ghost" type="button" data-close-panel="batchPatternsPanel">Close</button>
+          </div>
+          <form id="batchPatternForm" class="batch-form">
+            <div class="field-row">
+              <label>
+                Review type
+                <select name="batchReviewType">
+                  <option value="mass_tort">Mass Tort QC</option>
+                  <option value="debt">Debt QC</option>
+                </select>
+              </label>
+              <label>
+                Vendor/source, if known
+                <input name="batchVendor" placeholder="Example: Vendor A">
+              </label>
+            </div>
+            <label>
+              Recordings to compare
+              <input name="batchRecordings" type="file" multiple accept="audio/*,video/mp4,video/webm,.m4a,.mp3,.wav,.mp4,.webm,.ogg">
+            </label>
+            <label>
+              Pattern focus
+              <textarea name="batchFocus" class="short" placeholder="Example: compare opening statements, symptoms, injury descriptions, vendor-linked wording, repeated story structure, and signs of coaching."></textarea>
+            </label>
+            <div class="actions">
+              <button class="primary" type="submit">Review patterns</button>
+            </div>
+          </form>
+          <div id="batchPatternStatus" class="empty hidden"></div>
+          <div id="batchPatternReport" class="report hidden"></div>
+        </section>
       </section>
     </main>
 
-    <script src="/app.js?v=20260513-1"></script>
+    <script src="/app.js?v=20260515-1"></script>
   </body>
 </html>

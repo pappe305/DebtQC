@@ -248,6 +248,50 @@ textarea:disabled {
   padding: 20px;
 }
 
+.drawer {
+  margin-top: 18px;
+  padding: 18px;
+}
+
+.drawer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.review-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.review-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfd;
+}
+
+.review-row span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.batch-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
 .report-head {
   display: flex;
   justify-content: space-between;
@@ -349,6 +393,30 @@ textarea:disabled {
   gap: 10px;
   border-top: 1px solid var(--line);
   padding-top: 14px;
+}
+
+.ask-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: start;
+  margin-top: 10px;
+}
+
+.answer-box {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #f8fafc;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.answer-box.error {
+  color: #7a271a;
+  background: #fff3f0;
+  border-color: #f3b6ac;
 }
 
 .lead-details {
@@ -519,6 +587,7 @@ pre {
   .layout,
   .field-row,
   .summary,
+  .ask-form,
   .scores,
   .lead-details {
     grid-template-columns: 1fr;
@@ -527,6 +596,8 @@ pre {
   .topbar,
   .topbar-actions,
   .report-head,
+  .drawer-head,
+  .review-row,
   .issue-title {
     align-items: start;
     flex-direction: column;
@@ -562,6 +633,7 @@ pre {
   .input-panel,
   .progress,
   .empty,
+  .ask-review,
   .download,
   .share-actions,
   #downloadReport {
