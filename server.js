@@ -1283,6 +1283,8 @@ function normalizeTortType(value) {
 async function detectCrossCasePatternWarnings({ currentId, report, intake, transcript, tortType, originalRecording }) {
   const warnings = [];
   const currentPhone = report.leadPhoneNumber || extractPhoneFromFilename(originalRecording);
+  const currentPhoneDigits = normalizePhone(currentPhone);
+  const currentRecordingNames = recordingNameSet({ originalRecording, recordings: transcript?.recordings });
   const currentTort = normalizeComparable(tortType || "");
   const currentText = [intake, transcript?.text, report?.summary].filter(Boolean).join("\n");
   const currentAddresses = extractAddresses(currentText);
@@ -1302,18 +1304,23 @@ async function detectCrossCasePatternWarnings({ currentId, report, intake, trans
 
   const previousReports = await readRecentReports(currentId, 150);
   const repeatedAddresses = new Map();
-  let repeatedPhone = null;
 
   for (const previous of previousReports) {
     const previousReport = previous.report || {};
-    const previousPhone = previousReport.leadPhoneNumber || extractPhoneFromFilename(previous.originalRecording);
+    const previousPhone = previousReport.leadPhoneNumber || previous.recordings?.map((recording) => recording.leadPhoneNumber || extractPhoneFromFilename(recording.filename)).find(Boolean) || extractPhoneFromFilename(previous.originalRecording);
+    const previousPhoneDigits = normalizePhone(previousPhone);
+    const previousRecordingNames = recordingNameSet(previous);
+    const sameLeadOrSameRecording = Boolean(
+      (currentPhoneDigits && previousPhoneDigits && currentPhoneDigits === previousPhoneDigits) ||
+      hasSetOverlap(currentRecordingNames, previousRecordingNames)
+    );
+    if (sameLeadOrSameRecording) {
+      continue;
+    }
+
     const previousTort = normalizeComparable(previous.tortType || "");
     const sameTort = currentTort && previousTort && currentTort === previousTort;
     const previousLabel = `${previous.caseName || previous.originalRecording || previous.id || "prior review"}${previous.createdAt ? ` (${new Date(previous.createdAt).toLocaleDateString("en-US")})` : ""}`;
-
-    if (currentPhone && previousPhone && normalizePhone(currentPhone) === normalizePhone(previousPhone)) {
-      repeatedPhone = previousLabel;
-    }
 
     const previousText = [
       previousReport.summary,
@@ -1331,17 +1338,6 @@ async function detectCrossCasePatternWarnings({ currentId, report, intake, trans
       count.sameTort ||= sameTort;
       repeatedAddresses.set(address, count);
     }
-  }
-
-  if (repeatedPhone) {
-    warnings.push(makeRiskIssue({
-      title: "Lead phone number appeared in a prior review",
-      severity: "medium",
-      evidence: `This phone number also appears in ${repeatedPhone}. This may be legitimate, but repeated claimant contact details should be checked.`,
-      reference: currentPhone,
-      expected: "Confirm whether this is the same claimant, a duplicate intake, or a shared/incorrect phone number.",
-      fix: "Compare the prior review before approving the intake."
-    }));
   }
 
   for (const item of repeatedAddresses.values()) {
@@ -1463,6 +1459,25 @@ function normalizeComparable(value) {
 
 function normalizePhone(value) {
   return String(value || "").replace(/\D/g, "").slice(-10);
+}
+
+function recordingNameSet(review) {
+  const names = [
+    review?.originalRecording,
+    ...(review?.recordings || []).map((recording) => recording.filename)
+  ];
+  return new Set(names.flatMap((name) => String(name || "").split(";")).map(normalizeRecordingName).filter(Boolean));
+}
+
+function normalizeRecordingName(name) {
+  return path.basename(String(name || "")).toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function hasSetOverlap(first, second) {
+  for (const item of first) {
+    if (second.has(item)) return true;
+  }
+  return false;
 }
 
 function issueToSearchText(issue) {
