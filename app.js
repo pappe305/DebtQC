@@ -83,8 +83,8 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   if (!recordingInput.files?.length) {
-    reportTitle.textContent = "Choose a recording";
-    renderEmpty("Please choose the call recording before starting the review.", true);
+    reportTitle.textContent = "Choose recording";
+    renderEmpty("Please choose at least one call recording before starting the review.", true);
     recordingInput.focus();
     return;
   }
@@ -134,7 +134,7 @@ form.addEventListener("reset", () => {
     downloadReport.classList.add("hidden");
     reportTitle.textContent = "Ready for a call";
     await loadDefaults();
-    renderEmpty("Choose a call recording. Add the completed intake form if it exists, or leave intake blank to review script/process only.");
+  renderEmpty("Choose one or more recordings for the same intake. Add the completed intake form if it exists, or leave intake blank to review script/process only.");
   }, 0);
 });
 
@@ -172,7 +172,7 @@ async function loadDefaults(replaceCurrent = false) {
     if (replaceCurrent || !processInput.value.trim()) processInput.value = defaults.process || "";
     if (defaults.script || defaults.process) {
       reportTitle.textContent = "Ready for a call";
-      renderEmpty(`${labelReviewType(reviewTypeInput.value)} defaults are loaded. Choose a call recording and add the intake form when it exists.`);
+      renderEmpty(`${labelReviewType(reviewTypeInput.value)} defaults are loaded. Choose one or more recordings for the same intake and add the intake form when it exists.`);
     } else if (replaceCurrent) {
       reportTitle.textContent = "No saved defaults";
       renderEmpty(`${labelReviewType(reviewTypeInput.value)} does not have saved script/process defaults yet. Load or paste them, then click Save as default.`);
@@ -317,17 +317,20 @@ function setBusy(isBusy) {
 }
 
 function updateRecordingStatus() {
-  const file = recordingInput.files?.[0];
-  if (!file) {
-    recordingStatus.textContent = "No call recording selected yet.";
+  const files = [...(recordingInput.files || [])];
+  if (!files.length) {
+    recordingStatus.textContent = "No call recordings selected yet.";
     recordingStatus.classList.add("warning");
     return;
   }
 
-  const sizeMb = file.size ? `, ${(file.size / 1024 / 1024).toFixed(1)} MB` : "";
-  recordingStatus.textContent = `Recording selected: ${file.name}${sizeMb}`;
+  const totalMb = files.reduce((sum, file) => sum + file.size, 0) / 1024 / 1024;
+  const names = files.map((file) => file.name).join(", ");
+  recordingStatus.textContent = files.length === 1
+    ? `Recording selected: ${names}, ${totalMb.toFixed(1)} MB`
+    : `Recordings selected for one intake: ${files.length} files, ${totalMb.toFixed(1)} MB total. ${names}`;
   recordingStatus.classList.remove("warning");
-  reportTitle.textContent = "Recording selected";
+  reportTitle.textContent = files.length === 1 ? "Recording selected" : "Recordings selected";
   renderEmpty("Add the completed intake form if it exists, or leave intake blank to review script/process only. Then click Review call.");
 }
 
@@ -356,7 +359,7 @@ function renderReport(payload) {
   latestReviewPayload = payload;
   const qa = payload.report;
   const hasIntake = payload.hasIntake !== false;
-  const leadPhone = extractPhoneFromFilename(payload.originalRecording) || qa.leadPhoneNumber || "Not found";
+  const leadPhone = extractPhoneFromPayload(payload) || qa.leadPhoneNumber || "Not found";
   const tortType = payload.reviewType === "debt" ? "Debt" : normalizeTortType(payload.tortType) || "Unknown tort";
   const reportName = buildReportName(leadPhone, tortType);
   reportTitle.textContent = reportName;
@@ -651,7 +654,7 @@ async function copyKeyFindings() {
 function buildKeyFindingsText(payload) {
   const qa = payload.report;
   const hasIntake = payload.hasIntake !== false;
-  const leadPhone = extractPhoneFromFilename(payload.originalRecording) || qa.leadPhoneNumber || "Not found";
+  const leadPhone = extractPhoneFromPayload(payload) || qa.leadPhoneNumber || "Not found";
   const tortType = payload.reviewType === "debt" ? "Debt" : normalizeTortType(payload.tortType) || "Unknown tort";
   const sections = [
     `Call QA Key Findings`,
@@ -700,6 +703,13 @@ function extractPhoneFromFilename(name) {
   const phone = candidates.at(-1);
   if (!phone) return "";
   return `(${phone.slice(0, 3)}) ${phone.slice(3, 6)}-${phone.slice(6)}`;
+}
+
+function extractPhoneFromPayload(payload) {
+  const fromRecording = (payload.recordings || [])
+    .map((recording) => recording.leadPhoneNumber || extractPhoneFromFilename(recording.filename))
+    .find(Boolean);
+  return fromRecording || extractPhoneFromFilename(payload.originalRecording);
 }
 
 function buildReportName(phone, tortType) {

@@ -158,12 +158,12 @@ async function handleAnalyze(req, res) {
       const part = parts.find((item) => item.name === name && item.filename && item.data?.length);
       return part ? await extractTextFromUpload(part) : "";
     };
-    const audioPart = parts.find((part) => part.name === "recording" && part.filename);
+    const audioParts = parts.filter((part) => part.name === "recording" && part.filename && part.data?.length);
     await writeLog(`Parts: ${parts.map((part) => `${part.name}${part.filename ? `=${part.filename}` : ""}`).join(", ")}`);
 
-    if (!audioPart?.data?.length) {
+    if (!audioParts.length) {
       await writeLog("Review stopped: no recording part");
-      return sendJson(res, 400, { error: "Please choose a call recording." });
+      return sendJson(res, 400, { error: "Please choose at least one call recording." });
     }
 
     const caseName = getField("caseName") || "Untitled call";
@@ -176,15 +176,27 @@ async function handleAnalyze(req, res) {
     await writeLog(`Text ready: intake=${intake.length}, script=${script.length}, process=${process.length}`);
 
     const jobId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID().slice(0, 8)}`;
-    const originalName = sanitizeFilename(audioPart.filename || "recording");
-    const leadPhoneFromRecording = extractPhoneFromFilename(originalName);
-    const tortType = reviewType === "debt" ? "Debt" : extractTortTypeFromIntake(intake);
-    const uploadPath = path.join(uploadDir, `${jobId}-${originalName}`);
-    await fs.writeFile(uploadPath, audioPart.data);
-    await writeLog(`Recording saved: ${originalName}`);
+    const recordings = [];
+    for (let index = 0; index < audioParts.length; index += 1) {
+      const audioPart = audioParts[index];
+      const originalName = sanitizeFilename(audioPart.filename || `recording-${index + 1}`);
+      const uploadPath = path.join(uploadDir, `${jobId}-${index + 1}-${originalName}`);
+      await fs.writeFile(uploadPath, audioPart.data);
+      await writeLog(`Recording saved: ${originalName}`);
+      const transcript = await transcribeRecording(audioPart);
+      await writeLog(`Transcription complete: ${originalName}, ${transcript.text.length} chars`);
+      recordings.push({
+        label: `Call ${index + 1}`,
+        filename: originalName,
+        leadPhoneNumber: extractPhoneFromFilename(originalName),
+        transcript
+      });
+    }
 
-    const transcript = await transcribeRecording(audioPart);
-    await writeLog(`Transcription complete: ${transcript.text.length} chars`);
+    const originalName = recordings.map((recording) => recording.filename).join("; ");
+    const leadPhoneFromRecording = recordings.map((recording) => recording.leadPhoneNumber).find(Boolean) || "";
+    const tortType = reviewType === "debt" ? "Debt" : extractTortTypeFromIntake(intake);
+    const transcript = combineTranscripts(recordings);
     const report = await reviewCall({
       caseName,
       reviewType,
@@ -222,6 +234,12 @@ async function handleAnalyze(req, res) {
       hasIntake: Boolean(intake),
       tortType,
       originalRecording: originalName,
+      recordings: recordings.map((recording) => ({
+        label: recording.label,
+        filename: recording.filename,
+        leadPhoneNumber: recording.leadPhoneNumber,
+        transcript: recording.transcript
+      })),
       models: {
         transcription: transcript.model || TRANSCRIPTION_MODEL,
         qa: QA_MODEL
@@ -670,6 +688,40 @@ async function transcribeWithModel(audioPart, model) {
   return normalizeTranscript(payload);
 }
 
+function combineTranscripts(recordings) {
+  if (recordings.length === 1) {
+    return {
+      ...recordings[0].transcript,
+      text: `[${recordings[0].label}: ${recordings[0].filename}]\n${recordings[0].transcript.text}`,
+      recordings: recordings.map((recording) => ({
+        label: recording.label,
+        filename: recording.filename,
+        leadPhoneNumber: recording.leadPhoneNumber
+      }))
+    };
+  }
+
+  const text = recordings
+    .map((recording) => `[${recording.label}: ${recording.filename}]\n${recording.transcript.text}`)
+    .join("\n\n---\n\n");
+
+  return {
+    text,
+    language: recordings.map((recording) => recording.transcript.language).find(Boolean) || null,
+    duration: recordings.reduce((sum, recording) => sum + (recording.transcript.duration || 0), 0) || null,
+    segments: recordings.flatMap((recording) => (recording.transcript.segments || []).map((segment) => ({
+      ...segment,
+      speaker: segment.speaker ? `${recording.label} ${segment.speaker}` : recording.label
+    }))),
+    model: [...new Set(recordings.map((recording) => recording.transcript.model).filter(Boolean))].join(", "),
+    recordings: recordings.map((recording) => ({
+      label: recording.label,
+      filename: recording.filename,
+      leadPhoneNumber: recording.leadPhoneNumber
+    }))
+  };
+}
+
 async function reviewCall({ caseName, reviewType, intake, script, process, reviewerFocus, transcript }) {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -701,6 +753,8 @@ async function reviewCall({ caseName, reviewType, intake, script, process, revie
                 "For Mass Tort Claims, the completed intake form is also the call script. If no separate script is supplied but intake notes are supplied, treat the intake questions and required answers as the approved script/question flow.",
                 "In Mass Tort reviews, do not say no script was included merely because the separate script field is blank; evaluate whether the agent followed the intake-form questions as the script.",
                 "If no intake notes are supplied, run a script and process compliance review only.",
+                "If multiple recordings are supplied for the same lead, treat them as one combined intake history. Do not mark information missing if it was covered in any supplied call.",
+                "When making findings for a multi-call review, identify the call label when possible, such as Call 1 or Call 2.",
                 "When no intake notes are supplied, do not create intake mismatch findings solely because the intake is absent.",
                 "In that no-intake mode, use missingInformation for required call fields or required process steps that were not captured or not asked during the call.",
                 "Also look for fraud risk indicators, but do not accuse anyone of fraud or state that fraud occurred.",
@@ -1351,7 +1405,7 @@ async function listSavedReports() {
           reviewType: saved.reviewType || (saved.id?.startsWith("batch-") ? "batch" : "debt"),
           tortType: saved.tortType || "",
           originalRecording: saved.originalRecording || "",
-          leadPhoneNumber: saved.report?.leadPhoneNumber || extractPhoneFromFilename(saved.originalRecording),
+          leadPhoneNumber: saved.report?.leadPhoneNumber || saved.recordings?.map((recording) => recording.leadPhoneNumber || extractPhoneFromFilename(recording.filename)).find(Boolean) || extractPhoneFromFilename(saved.originalRecording),
           agentName: saved.report?.agentName || "",
           overallStatus: saved.report?.overallStatus || saved.report?.overallRiskLevel || "",
           isBatch: Boolean(saved.recordings && saved.report?.patterns)

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Call QA Reviewer</title>
-    <link rel="stylesheet" href="/styles.css?v=20260515-1">
+    <link rel="stylesheet" href="/styles.css?v=20260518-1">
   </head>
   <body>
     <main class="shell">
@@ -41,12 +41,12 @@
             <div class="field-row">
               <label>
                 1. Call recording audio
-                <input id="recording" name="recording" type="file" accept="audio/*,video/mp4,video/webm,.m4a,.mp3,.wav,.mp4,.webm,.ogg" required>
+                <input id="recording" name="recording" type="file" multiple accept="audio/*,video/mp4,video/webm,.m4a,.mp3,.wav,.mp4,.webm,.ogg" required>
               </label>
             </div>
 
             <div id="recordingStatus" class="file-status warning">
-              No call recording selected yet.
+              No call recordings selected yet.
             </div>
 
             <label>
@@ -108,7 +108,7 @@
             </div>
 
             <div id="emptyState" class="empty">
-              Upload the call recording, paste the intake notes, and add your script or process rules. The report will appear here.
+              Upload one or more recordings for the same intake, paste the intake notes, and add your script or process rules. The report will appear here.
             </div>
 
             <div id="report" class="report hidden"></div>
@@ -166,6 +166,6 @@
       </section>
     </main>
 
-    <script src="/app.js?v=20260515-1"></script>
+    <script src="/app.js?v=20260518-1"></script>
   </body>
 </html>
