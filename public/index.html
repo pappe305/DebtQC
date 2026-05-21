@@ -1,46 +1,171 @@
-Local Call Review
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Call QA Reviewer</title>
+    <link rel="stylesheet" href="/styles.css?v=20260520-1">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Local Call Review</p>
+            <h1>Call QA Reviewer</h1>
+          </div>
+          <div class="topbar-actions">
+            <button class="secondary" type="button" id="previousReviewsButton">Previous reviews</button>
+            <button class="secondary" type="button" id="batchPatternsButton">Batch patterns</button>
+            <a class="download" href="/api/qc-log" download="qc-log.csv">QC log</a>
+            <div class="status" id="statusPill">Checking setup</div>
+          </div>
+        </header>
 
-Call QA Reviewer
-Previous reviews Batch patterns QC log
-Checking setup
-Review type 
-Debt QC
- Case or client name 
-Example: Smith intake call
-1. Call recording audio No file chosen
-No call recordings selected yet.
-2. Completed intake form / answers to verify 
-Optional: paste or load the completed intake form. The app will verify each populated answer against what the caller said. Leave blank to review script/process only.
-No file chosen Load intake file
-Separate approved script, if any 
-Optional: paste a separate script if it is not already included in the intake form.
-No file chosen Load script file Save as default
-Internal process rules 
-Paste policies, do-not-say items, escalation rules, consent language, verification steps, or required fields.
-No file chosen Load process file Save as default
-Reviewer focus 
-Optional: note any special concerns for this review.
-Review call Clear
-Ready for files.
-QA Report
+        <form id="reviewForm" class="layout">
+          <section class="panel input-panel">
+            <div class="field-row">
+              <label>
+                Review type
+                <select name="reviewType" id="reviewType">
+                  <option value="debt">Debt QC</option>
+                  <option value="mass_tort">Mass Tort QC</option>
+                </select>
+              </label>
+              <label>
+                Case or client name
+                <input name="caseName" placeholder="Example: Smith intake call">
+              </label>
+            </div>
 
-Waiting for a recording
-Report JSON
-Transcribing and reviewing the call. Longer recordings can take a few minutes.
+            <div class="field-row">
+              <label>
+                1. Call recording audio
+                <input id="recording" name="recording" type="file" multiple accept="audio/*,video/mp4,video/webm,.m4a,.mp3,.wav,.mp4,.webm,.ogg" required>
+              </label>
+            </div>
 
-Upload one or more recordings for the same intake, paste the intake notes, and add your script or process rules. The report will appear here.
-History
+            <div id="recordingStatus" class="file-status warning">
+              No call recordings selected yet.
+            </div>
 
-Previous reviews
-Close
-Pattern Scan
+            <label>
+              2. Completed intake form / answers to verify
+              <textarea name="intake" id="intake" placeholder="Optional: paste or load the completed intake form. The app will verify each populated answer against what the caller said. Leave blank to review script/process only."></textarea>
+            </label>
+            <div class="file-helper">
+              <input id="intakeFile" name="intakeFile" type="file" accept=".txt,.csv,.json,.md,.docx,.xlsx,.pdf,.jpg,.jpeg,.png,.webp,.gif">
+              <button type="button" class="ghost" data-load-file="intakeFile" data-target="intake">Load intake file</button>
+            </div>
 
-Batch patterns
-Close
-Review type 
-Mass Tort QC
- Vendor/source, if known 
-Example: Vendor A
-Recordings to compare No file chosen Pattern focus 
-Example: compare opening statements, symptoms, injury descriptions, vendor-linked wording, repeated story structure, and signs of coaching.
-Review patterns
+            <label>
+              Separate approved script, if any
+              <textarea name="script" id="script" placeholder="Optional: paste a separate script if it is not already included in the intake form."></textarea>
+            </label>
+            <div class="file-helper">
+              <input id="scriptFile" name="scriptFile" type="file" accept=".txt,.csv,.json,.md,.docx,.xlsx,.pdf,.jpg,.jpeg,.png,.webp,.gif">
+              <button type="button" class="ghost" data-load-file="scriptFile" data-target="script">Load script file</button>
+              <button type="button" class="ghost" data-save-defaults>Save as default</button>
+            </div>
+
+            <label>
+              Internal process rules
+              <textarea name="process" id="process" placeholder="Paste policies, do-not-say items, escalation rules, consent language, verification steps, or required fields."></textarea>
+            </label>
+            <div class="file-helper">
+              <input id="processFile" name="processFile" type="file" accept=".txt,.csv,.json,.md,.docx,.xlsx,.pdf,.jpg,.jpeg,.png,.webp,.gif">
+              <button type="button" class="ghost" data-load-file="processFile" data-target="process">Load process file</button>
+              <button type="button" class="ghost" data-save-defaults>Save as default</button>
+            </div>
+
+            <label>
+              Reviewer focus
+              <textarea name="reviewerFocus" class="short" placeholder="Optional: note any special concerns for this review."></textarea>
+            </label>
+
+            <div class="actions">
+              <button class="primary" type="submit">Review call</button>
+              <button class="secondary" type="reset">Clear</button>
+            </div>
+
+            <div id="uploadSummary" class="file-status">
+              Ready for files.
+            </div>
+          </section>
+
+          <section class="panel report-panel">
+            <div class="report-head">
+              <div>
+                <p class="eyebrow">QA Report</p>
+                <h2 id="reportTitle">Waiting for a recording</h2>
+              </div>
+              <a id="downloadReport" class="download hidden" href="#" download>Report JSON</a>
+            </div>
+
+            <div id="progress" class="progress hidden">
+              <div class="bar"></div>
+              <p>Transcribing and reviewing the call. Longer recordings can take a few minutes.</p>
+            </div>
+
+            <div id="emptyState" class="empty">
+              Upload one or more recordings for the same intake, paste the intake notes, and add your script or process rules. The report will appear here.
+            </div>
+
+            <div id="report" class="report hidden"></div>
+          </section>
+        </form>
+
+        <section class="panel drawer hidden" id="previousReviewsPanel">
+          <div class="drawer-head">
+            <div>
+              <p class="eyebrow">History</p>
+              <h2>Previous reviews</h2>
+            </div>
+            <button class="ghost" type="button" data-close-panel="previousReviewsPanel">Close</button>
+          </div>
+          <div id="previousReviewsList" class="review-list"></div>
+        </section>
+
+        <section class="panel drawer hidden" id="batchPatternsPanel">
+          <div class="drawer-head">
+            <div>
+              <p class="eyebrow">Pattern Scan</p>
+              <h2>Batch patterns</h2>
+            </div>
+            <button class="ghost" type="button" data-close-panel="batchPatternsPanel">Close</button>
+          </div>
+          <form id="batchPatternForm" class="batch-form">
+            <div class="field-row">
+              <label>
+                Review type
+                <select name="batchReviewType">
+                  <option value="mass_tort">Mass Tort QC</option>
+                  <option value="debt">Debt QC</option>
+                </select>
+              </label>
+              <label>
+                Vendor/source, if known
+                <input name="batchVendor" placeholder="Example: Vendor A">
+              </label>
+            </div>
+            <label>
+              Recordings to compare
+              <input name="batchRecordings" type="file" multiple accept="audio/*,video/mp4,video/webm,.m4a,.mp3,.wav,.mp4,.webm,.ogg">
+            </label>
+            <label>
+              Pattern focus
+              <textarea name="batchFocus" class="short" placeholder="Example: compare opening statements, symptoms, injury descriptions, vendor-linked wording, repeated story structure, and signs of coaching."></textarea>
+            </label>
+            <div class="actions">
+              <button class="primary" type="submit">Review patterns</button>
+            </div>
+          </form>
+          <div id="batchPatternStatus" class="empty hidden"></div>
+          <div id="batchPatternReport" class="report hidden"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js?v=20260520-1"></script>
+  </body>
+</html>
